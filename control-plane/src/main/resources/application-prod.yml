@@ -1,0 +1,4 @@
+aegis:
+  seed-enabled: false
+  failure-simulation-enabled: false
+  cookie-secure: true

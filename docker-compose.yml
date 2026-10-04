@@ -1,0 +1,193 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: aegistrace
+      POSTGRES_USER: aegis
+      POSTGRES_PASSWORD: change-me-postgres-dev-only
+    ports:
+      - "5435:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aegis -d aegistrace"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7
+    command: ["redis-server", "--requirepass", "change-me-redis-dev-only"]
+    ports:
+      - "6382:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "change-me-redis-dev-only", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  garage:
+    image: dxflrs/garage:v2.2.0
+    command: ["/garage", "server"]
+    ports:
+      - "9010:3900"
+    volumes:
+      - ./infrastructure/garage/garage.toml:/etc/garage.toml:ro
+      - garage-meta:/var/lib/garage/meta
+      - garage-data:/var/lib/garage/data
+
+  garage-init:
+    image: python:3.12-slim
+    depends_on:
+      garage:
+        condition: service_started
+    environment:
+      GARAGE_ADMIN_URL: http://garage:3903
+      GARAGE_ADMIN_TOKEN: change-me-garage-admin-dev
+      GARAGE_ACCESS_KEY: GK000000000000000000000001
+      GARAGE_SECRET_KEY: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+      GARAGE_BUCKET: aegistrace-documents
+    volumes:
+      - ./infrastructure/garage/bootstrap.py:/bootstrap.py:ro
+    command: ["python", "/bootstrap.py"]
+    restart: "no"
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.115.1
+    command: ["--config=/etc/otel/config.yaml"]
+    volumes:
+      - ./infrastructure/otel/collector.yaml:/etc/otel/config.yaml:ro
+    ports:
+      - "4318:4318"
+    depends_on:
+      - jaeger
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.63.0
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    volumes:
+      - ./infrastructure/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: grafana/grafana:11.4.0
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_USERS_DEFAULT_THEME: dark
+    volumes:
+      - ./infrastructure/grafana/provisioning:/etc/grafana/provisioning:ro
+    ports:
+      - "3001:3000"
+    depends_on:
+      - prometheus
+
+  control-plane:
+    build:
+      context: ./control-plane
+    environment:
+      DATABASE_URL: jdbc:postgresql://postgres:5432/aegistrace
+      POSTGRES_USER: aegis
+      POSTGRES_PASSWORD: change-me-postgres-dev-only
+      AEGIS_JWT_SECRET: change-me-jwt-secret-at-least-32-bytes
+      AEGIS_INTERNAL_TOKEN: change-me-internal-token
+      AEGIS_RUNTIME_URL: http://agent-runtime:8090
+      AEGIS_SEED_ENABLED: "true"
+      AEGIS_SEED_PASSWORD: change-me-dev-password
+      AEGIS_ENVIRONMENT: dev
+      AEGIS_FAILURE_SIMULATION: "true"
+      FRONTEND_ORIGIN: http://localhost:3000
+      REDIS_ENABLED: "true"
+      REDIS_HOST: redis
+      REDIS_PASSWORD: change-me-redis-dev-only
+      S3_ENDPOINT: http://garage:3900
+      S3_ACCESS_KEY: GK000000000000000000000001
+      S3_SECRET_KEY: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+      S3_BUCKET: aegistrace-documents
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318/v1/traces
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      garage-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/readiness"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  agent-runtime:
+    build:
+      context: .
+      dockerfile: agent-runtime/Dockerfile
+    environment:
+      DATABASE_URL: postgresql://aegis:change-me-postgres-dev-only@postgres:5432/aegistrace
+      AEGIS_INTERNAL_TOKEN: change-me-internal-token
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+    ports:
+      - "8090:8090"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/liveness')"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  worker:
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+    environment:
+      DATABASE_URL: postgresql://aegis:change-me-postgres-dev-only@postgres:5432/aegistrace
+      AEGIS_INTERNAL_TOKEN: change-me-internal-token
+      CONTROL_PLANE_URL: http://control-plane:8080
+      SEED_KNOWLEDGE: "true"
+      S3_ENDPOINT: http://garage:3900
+      S3_ACCESS_KEY: GK000000000000000000000001
+      S3_SECRET_KEY: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+      S3_BUCKET: aegistrace-documents
+    depends_on:
+      postgres:
+        condition: service_healthy
+      control-plane:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8091/liveness')"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_BASE: /backend
+        NEXT_PUBLIC_JAEGER_URL: http://localhost:16686
+        NEXT_PUBLIC_GRAFANA_URL: http://localhost:3001
+    environment:
+      API_INTERNAL_URL: http://control-plane:8080
+    ports:
+      - "3000:3000"
+    depends_on:
+      control-plane:
+        condition: service_healthy
+
+volumes:
+  postgres-data:
+  garage-meta:
+  garage-data:
