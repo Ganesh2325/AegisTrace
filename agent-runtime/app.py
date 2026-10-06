@@ -14,8 +14,11 @@ from pydantic import BaseModel
 from aegislib.embedding import embed
 from aegislib.grounding import grounded_answer, rank_chunks
 from aegislib.planner import merge_model_proposal
+from aegislib.telemetry import configure, consumer_context, span
 
-app = FastAPI(title="AegisTrace agent runtime")
+configure("agent-runtime")
+
+app = FastAPI(title="AegisTrace agent runtime", telemetry={"auto_configure": False})
 TOKEN = os.environ.get("AEGIS_INTERNAL_TOKEN", "")
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 
@@ -63,60 +66,79 @@ def readiness():
 
 
 @app.post("/v1/plan")
-def plan(body: PlanRequest, x_internal_token: str = Header(default="")):
+def plan(body: PlanRequest, x_internal_token: str = Header(default=""), traceparent: str | None = Header(default=None)):
     if TOKEN and x_internal_token != TOKEN:
         raise HTTPException(status_code=401, detail="Internal token is invalid.")
     if body.simulate == "model_timeout":
         time.sleep(30)
-    started = time.perf_counter()
-    chunks = _load_chunks(body.workspaceId, body.knowledgeBaseId, body.knowledgeBaseVersionId, body.embeddingModel)
-    retrieval_ms = int((time.perf_counter() - started) * 1000)
-    ranked = rank_chunks(body.question, chunks, k=4)
-    grounded = grounded_answer(body.question, ranked)
-    model_started = time.perf_counter()
-    answer = grounded["answer"]
-    notes: list[str] = []
-    model_proposal = None
-    provider = body.provider
-    model = body.model
-    if body.provider == "openai" and os.environ.get("OPENAI_API_KEY"):
-        try:
-            generated = _openai(body, ranked, grounded)
-            answer = generated["answer"] or answer
-            model_proposal = generated.get("toolProposal")
-            notes.extend(generated.get("notes") or [])
-            provider = "openai"
-            model = body.model
-        except httpx.TimeoutException as exc:
-            raise HTTPException(status_code=504, detail="model timeout") from exc
-        except httpx.HTTPStatusError as exc:
-            raise HTTPException(status_code=exc.response.status_code, detail="model http error") from exc
-    merged = merge_model_proposal(body.question, len(grounded["citations"]), set(body.allowedTools), model_proposal)
-    notes.extend(merged["notes"])
-    input_tokens = max(1, (len(body.question) + sum(len(c["content"]) for c in ranked)) // 4)
-    output_tokens = max(1, len(answer) // 4)
-    return {
-        "answer": answer,
-        "supported": grounded["supported"],
-        "abstained": grounded["abstained"],
-        "uncertain": grounded["uncertain"],
-        "citations": grounded["citations"],
-        "retrievedChunkCount": len(ranked),
-        "usage": {
-            "inputTokens": input_tokens,
-            "outputTokens": output_tokens,
-            "latencyMs": int((time.perf_counter() - model_started) * 1000),
-            "retrievalLatencyMs": retrieval_ms,
-            "provider": provider,
-            "model": model,
-        },
-        "toolProposal": merged["proposal"],
-        "notes": notes,
-    }
+    parent = consumer_context_from_header(traceparent)
+    with span("aegistrace.runtime.execute", {
+        "run.id": body.runId,
+        "workspace.id": body.workspaceId,
+        "knowledge.version_id": body.knowledgeBaseVersionId or "",
+        "service": "agent-runtime",
+        "environment": os.environ.get("AEGIS_ENVIRONMENT", "dev"),
+    }, context=parent):
+        started = time.perf_counter()
+        with span("aegistrace.retrieval.load", {
+            "service": "agent-runtime",
+            "knowledge.version_id": body.knowledgeBaseVersionId or "",
+        }):
+            chunks = _load_chunks(body.workspaceId, body.knowledgeBaseId, body.knowledgeBaseVersionId, body.embeddingModel)
+        retrieval_ms = int((time.perf_counter() - started) * 1000)
+        ranked = rank_chunks(body.question, chunks, k=4)
+        with span("aegistrace.runtime.ground", {"service": "agent-runtime", "model.invoked": False}):
+            grounded = grounded_answer(body.question, ranked)
+        model_started = time.perf_counter()
+        answer = grounded["answer"]
+        notes: list[str] = []
+        model_proposal = None
+        provider = body.provider
+        model = body.model
+        if body.provider == "openai" and os.environ.get("OPENAI_API_KEY"):
+            try:
+                with span("aegistrace.model.generate", {
+                    "service": "agent-runtime",
+                    "model.provider": "openai",
+                    "model.name": body.model,
+                    "model.invoked": True,
+                }):
+                    generated = _openai(body, ranked, grounded)
+                answer = generated["answer"] or answer
+                model_proposal = generated.get("toolProposal")
+                notes.extend(generated.get("notes") or [])
+                provider = "openai"
+                model = body.model
+            except httpx.TimeoutException as exc:
+                raise HTTPException(status_code=504, detail="model timeout") from exc
+            except httpx.HTTPStatusError as exc:
+                raise HTTPException(status_code=exc.response.status_code, detail="model http error") from exc
+        merged = merge_model_proposal(body.question, len(grounded["citations"]), set(body.allowedTools), model_proposal)
+        notes.extend(merged["notes"])
+        input_tokens = max(1, (len(body.question) + sum(len(c["content"]) for c in ranked)) // 4)
+        output_tokens = max(1, len(answer) // 4)
+        return {
+            "answer": answer,
+            "supported": grounded["supported"],
+            "abstained": grounded["abstained"],
+            "uncertain": grounded["uncertain"],
+            "citations": grounded["citations"],
+            "retrievedChunkCount": len(ranked),
+            "usage": {
+                "inputTokens": input_tokens,
+                "outputTokens": output_tokens,
+                "latencyMs": int((time.perf_counter() - model_started) * 1000),
+                "retrievalLatencyMs": retrieval_ms,
+                "provider": provider,
+                "model": model,
+            },
+            "toolProposal": merged["proposal"],
+            "notes": notes,
+        }
 
 
 @app.post("/v1/retrieve")
-def retrieve(body: RetrieveRequest, x_internal_token: str = Header(default="")):
+def retrieve(body: RetrieveRequest, x_internal_token: str = Header(default=""), traceparent: str | None = Header(default=None)):
     if TOKEN and x_internal_token != TOKEN:
         raise HTTPException(status_code=401, detail="Internal token is invalid.")
     query = (body.query or "").strip()
@@ -127,28 +149,43 @@ def retrieve(body: RetrieveRequest, x_internal_token: str = Header(default="")):
     top_k = body.topK if body.topK is not None else 5
     if top_k < 1 or top_k > 20:
         raise HTTPException(status_code=400, detail="topK must be between 1 and 20.")
-    started = time.perf_counter()
-    chunks = _load_chunks(body.workspaceId, body.knowledgeBaseId, body.knowledgeBaseVersionId, body.embeddingModel)
-    ranked = rank_chunks(query, chunks, k=top_k)
-    hits = []
-    for chunk in ranked:
-        hits.append({
-            "documentId": chunk["document_id"],
-            "documentTitle": chunk["document_title"],
-            "chunkId": chunk["chunk_id"],
-            "section": chunk.get("section") or "",
-            "page": chunk.get("page_number"),
-            "quote": chunk["content"][:500],
-            "fusionScore": round(float(chunk.get("fusion_score") or 0), 4),
-            "vectorScore": round(float(chunk.get("vector_score") or 0), 4),
-            "lexicalScore": round(float(chunk.get("lexical_score") or 0), 4),
-            "score": round(float(chunk.get("score") or 0), 4),
-        })
-    return {
-        "hits": hits,
-        "retrievedChunkCount": len(ranked),
-        "latencyMs": int((time.perf_counter() - started) * 1000),
-    }
+    parent = consumer_context_from_header(traceparent)
+    with span("aegistrace.runtime.retrieve", {
+        "workspace.id": body.workspaceId,
+        "knowledge.version_id": body.knowledgeBaseVersionId or "",
+        "service": "agent-runtime",
+    }, context=parent):
+        started = time.perf_counter()
+        with span("aegistrace.retrieval.load", {
+            "service": "agent-runtime",
+            "knowledge.version_id": body.knowledgeBaseVersionId or "",
+        }):
+            chunks = _load_chunks(body.workspaceId, body.knowledgeBaseId, body.knowledgeBaseVersionId, body.embeddingModel)
+        ranked = rank_chunks(query, chunks, k=top_k)
+        hits = []
+        for chunk in ranked:
+            hits.append({
+                "documentId": chunk["document_id"],
+                "documentTitle": chunk["document_title"],
+                "chunkId": chunk["chunk_id"],
+                "section": chunk.get("section") or "",
+                "page": chunk.get("page_number"),
+                "quote": chunk["content"][:500],
+                "fusionScore": round(float(chunk.get("fusion_score") or 0), 4),
+                "vectorScore": round(float(chunk.get("vector_score") or 0), 4),
+                "lexicalScore": round(float(chunk.get("lexical_score") or 0), 4),
+                "score": round(float(chunk.get("score") or 0), 4),
+            })
+        return {
+            "hits": hits,
+            "retrievedChunkCount": len(ranked),
+            "latencyMs": int((time.perf_counter() - started) * 1000),
+        }
+
+
+def consumer_context_from_header(header: str | None):
+    from aegislib.telemetry import context_from_traceparent
+    return context_from_traceparent(header)
 
 
 def _load_chunks(workspace_id: str, knowledge_base_id: str, knowledge_base_version_id: str | None, embedding_model: str) -> list[dict]:

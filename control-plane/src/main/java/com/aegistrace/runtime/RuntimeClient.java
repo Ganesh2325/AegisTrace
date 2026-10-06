@@ -2,8 +2,11 @@ package com.aegistrace.runtime;
 
 import com.aegistrace.common.ApiException;
 import com.aegistrace.config.AppProperties;
+import com.aegistrace.observability.W3cTraceContext;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.micrometer.tracing.Tracer;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.ResourceAccessException;
@@ -19,10 +22,12 @@ import java.util.Map;
 public class RuntimeClient {
     private final AppProperties properties;
     private final ObjectMapper mapper;
+    private final Tracer tracer;
 
-    public RuntimeClient(AppProperties properties, ObjectMapper mapper) {
+    public RuntimeClient(AppProperties properties, ObjectMapper mapper, ObjectProvider<Tracer> tracer) {
         this.properties = properties;
         this.mapper = mapper;
+        this.tracer = tracer.getIfAvailable(() -> Tracer.NOOP);
     }
 
     public List<Map<String, Object>> retrieve(Map<String, Object> body) {
@@ -37,6 +42,7 @@ public class RuntimeClient {
             JsonNode node = client.post()
                     .uri("/v1/retrieve")
                     .header("X-Internal-Token", properties.getInternalToken())
+                    .headers(this::traceparent)
                     .body(body)
                     .retrieve()
                     .body(JsonNode.class);
@@ -64,6 +70,7 @@ public class RuntimeClient {
             JsonNode node = client.post()
                     .uri("/v1/plan")
                     .header("X-Internal-Token", properties.getInternalToken())
+                    .headers(this::traceparent)
                     .body(body)
                     .retrieve()
                     .body(JsonNode.class);
@@ -123,6 +130,19 @@ public class RuntimeClient {
                     proposalMap,
                     notes
             );
+        }
+    }
+
+    private void traceparent(org.springframework.http.HttpHeaders headers) {
+        var current = tracer.currentSpan();
+        if (current == null || current.context() == null) {
+            return;
+        }
+        var context = current.context();
+        boolean sampled = context.sampled() == null || Boolean.TRUE.equals(context.sampled());
+        String header = W3cTraceContext.traceparent(context.traceId(), context.spanId(), sampled);
+        if (header != null) {
+            headers.set("traceparent", header);
         }
     }
 

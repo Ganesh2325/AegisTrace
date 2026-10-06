@@ -298,8 +298,8 @@ public class ObservabilityService {
     private List<Map<String, Object>> services() {
         return List.of(
                 Map.of("name", "Control plane", "telemetry", "OpenTelemetry traces and Prometheus scrape of /actuator/prometheus"),
-                Map.of("name", "AI runtime", "telemetry", "No OpenTelemetry export. Correlated by stored run_id and trace_id on the plan request."),
-                Map.of("name", "Worker", "telemetry", "No OpenTelemetry export. Correlated by job payload run_id, proposal_id, and trace_id."),
+                Map.of("name", "AI runtime", "telemetry", "OpenTelemetry spans for retrieval, grounding, and model calls when a provider is invoked. Joins the control-plane trace via W3C traceparent."),
+                Map.of("name", "Worker", "telemetry", "OpenTelemetry consumer span linked as a child of the stored run span. Tool execution is a child span. The approval HTTP request is not held open."),
                 Map.of("name", "PostgreSQL", "telemetry", "Product events and audit events. Not a trace store."),
                 Map.of("name", "Redis", "telemetry", "Not used as a metrics source in this view.")
         );

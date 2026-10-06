@@ -134,8 +134,28 @@ export function waterfallRows(spans: TraceSpan[]) {
   const min = Math.min(...spans.map((span) => span.startUs || 0));
   const max = Math.max(...spans.map((span) => (span.startUs || 0) + (span.durationUs || 0)));
   const total = Math.max(max - min, 1);
-  return spans.map((span) => ({
+  const byId = new Map(spans.map((span) => [span.spanId, span]));
+  const children = new Map<string, TraceSpan[]>();
+  const roots: TraceSpan[] = [];
+  for (const span of spans) {
+    const parent = span.parentSpanId && byId.has(span.parentSpanId) ? span.parentSpanId : "";
+    if (!parent) roots.push(span);
+    else {
+      const list = children.get(parent) ?? [];
+      list.push(span);
+      children.set(parent, list);
+    }
+  }
+  const byStart = (left: TraceSpan, right: TraceSpan) => (left.startUs || 0) - (right.startUs || 0);
+  const ordered: { span: TraceSpan; depth: number }[] = [];
+  const walk = (span: TraceSpan, depth: number) => {
+    ordered.push({ span, depth });
+    for (const child of (children.get(span.spanId) ?? []).sort(byStart)) walk(child, depth + 1);
+  };
+  for (const root of roots.sort(byStart)) walk(root, 0);
+  return ordered.map(({ span, depth }) => ({
     ...span,
+    depth,
     offsetPct: ((span.startUs - min) / total) * 100,
     widthPct: Math.max(((span.durationUs || 0) / total) * 100, 0.6),
   }));

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from opentelemetry import trace
+
 from aegislib.embedding import cosine, embed, tokenize
+from aegislib.telemetry import set_safe, span
 
 ABSTAIN = "I don't have enough documented evidence to answer that confidently."
 
@@ -48,18 +51,26 @@ def rrf(rankings: list[list[dict]], k: int = 4, constant: int = 60) -> list[dict
 def rank_chunks(question: str, chunks: list[dict], k: int = 4) -> list[dict]:
     if not chunks:
         return []
-    qv = embed(question)
-    vector_ranked = sorted(
-        chunks,
-        key=lambda c: cosine(qv, c["embedding"]),
-        reverse=True,
-    )
-    lexical_ranked = sorted(
-        chunks,
-        key=lambda c: lexical_score(question, c["content"]),
-        reverse=True,
-    )
-    fused = rrf([vector_ranked, lexical_ranked], k=k)
+    with span("aegistrace.retrieval.search", {
+        "service": "agent-runtime",
+        "retrieval.strategy": "hybrid_rrf",
+        "retrieval.candidates": len(chunks),
+    }):
+        with span("aegistrace.vector.search", {"service": "agent-runtime", "retrieval.candidates": len(chunks)}):
+            qv = embed(question)
+            vector_ranked = sorted(
+                chunks,
+                key=lambda c: cosine(qv, c["embedding"]),
+                reverse=True,
+            )
+        with span("aegistrace.lexical.search", {"service": "agent-runtime", "retrieval.candidates": len(chunks)}):
+            lexical_ranked = sorted(
+                chunks,
+                key=lambda c: lexical_score(question, c["content"]),
+                reverse=True,
+            )
+        fused = rrf([vector_ranked, lexical_ranked], k=k)
+        set_safe(trace.get_current_span(), "retrieval.chunk_count", len(fused))
     for row in fused:
         row["vector_score"] = cosine(qv, row["embedding"])
         row["lexical_score"] = lexical_score(question, row["content"])

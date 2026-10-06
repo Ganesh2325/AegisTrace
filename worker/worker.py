@@ -22,6 +22,9 @@ from aegislib.chunking import chunk_pages, normalize_text
 from aegislib.embedding import MODEL_ID, embed, to_pgvector
 from aegislib.execution import ExecutionError, execute_ticket
 from aegislib.retries import backoff_seconds, classify_retry
+from aegislib.telemetry import configure, consumer_context, current_traceparent, span
+
+configure("worker")
 
 DATABASE_URL = os.environ["DATABASE_URL"]
 TOKEN = os.environ.get("AEGIS_INTERNAL_TOKEN", "")
@@ -39,7 +42,12 @@ def main() -> None:
         except Exception as exc:
             print(f"seed_failed {exc.__class__.__name__}")
     while True:
-        job = claim()
+        try:
+            job = claim()
+        except Exception as exc:
+            print(f"claim_failed {exc.__class__.__name__}")
+            time.sleep(1)
+            continue
         if job is None:
             time.sleep(0.5)
             continue
@@ -156,23 +164,40 @@ def process(job) -> None:
         f"job_claimed type={job['job_type']} run_id={payload.get('runId')} "
         f"trace_id={payload.get('traceId')} proposal_id={payload.get('proposalId')}"
     )
-    if job["job_type"] == "EMBED_DOCUMENT":
-        embed_document(payload["documentId"])
-    elif job["job_type"] == "EXECUTE_TOOL":
-        execute_and_callback(job)
-    elif job["job_type"] == "EVALUATE_RUN":
-        evaluate_run(payload["runId"])
-    elif job["job_type"] == "SIMULATE":
-        mode = payload.get("mode")
-        if mode == "ticket_400":
-            raise ExecutionError("TICKET_400", "Simulated invalid ticket.", False)
-        if mode in {"ticket_500", "ticket_timeout", "crash_before_insert"}:
-            raise ExecutionError("TICKET_500" if mode != "ticket_timeout" else "TIMEOUT", "Simulated failure.", True)
-        if mode == "crash_after_insert":
-            raise ExecutionError("TICKET_500", "Simulated crash after a no-op insert.", True)
-        raise ExecutionError("INVALID_ARGUMENTS", "Unknown simulation.", False)
-    else:
-        raise ExecutionError("INVALID_ARGUMENTS", "Unknown job type.", False)
+    parent = consumer_context(str(payload.get("traceId") or ""), str(payload.get("spanId") or ""))
+    attributes = {
+        "service": "worker",
+        "job.type": job["job_type"],
+        "run.id": str(payload.get("runId") or ""),
+        "workspace.id": str(payload.get("workspaceId") or ""),
+        "environment": os.environ.get("AEGIS_ENVIRONMENT", "dev"),
+    }
+    if job["job_type"] == "EXECUTE_TOOL":
+        attributes["tool.name"] = str(payload.get("tool") or "")
+    with span("aegistrace.worker.job", attributes, context=parent):
+        if job["job_type"] == "EMBED_DOCUMENT":
+            embed_document(payload["documentId"])
+        elif job["job_type"] == "EXECUTE_TOOL":
+            with span("aegistrace.tool.execute", {
+                "service": "worker",
+                "tool.name": str(payload.get("tool") or ""),
+                "run.id": str(payload.get("runId") or ""),
+                "workspace.id": str(payload.get("workspaceId") or ""),
+            }):
+                execute_and_callback(job)
+        elif job["job_type"] == "EVALUATE_RUN":
+            evaluate_run(payload["runId"])
+        elif job["job_type"] == "SIMULATE":
+            mode = payload.get("mode")
+            if mode == "ticket_400":
+                raise ExecutionError("TICKET_400", "Simulated invalid ticket.", False)
+            if mode in {"ticket_500", "ticket_timeout", "crash_before_insert"}:
+                raise ExecutionError("TICKET_500" if mode != "ticket_timeout" else "TIMEOUT", "Simulated failure.", True)
+            if mode == "crash_after_insert":
+                raise ExecutionError("TICKET_500", "Simulated crash after a no-op insert.", True)
+            raise ExecutionError("INVALID_ARGUMENTS", "Unknown simulation.", False)
+        else:
+            raise ExecutionError("INVALID_ARGUMENTS", "Unknown job type.", False)
 
 
 def execute_and_callback(job) -> None:
@@ -209,10 +234,14 @@ def execute_and_callback(job) -> None:
 
 
 def callback(run_id: str, body: dict) -> None:
+    headers = {"X-Internal-Token": TOKEN}
+    parent = current_traceparent()
+    if parent:
+        headers["traceparent"] = parent
     with httpx.Client(timeout=10) as client:
         response = client.post(
             f"{CONTROL_PLANE}/internal/runs/{run_id}/tool-result",
-            headers={"X-Internal-Token": TOKEN},
+            headers=headers,
             json=body,
         )
         response.raise_for_status()

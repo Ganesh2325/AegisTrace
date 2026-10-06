@@ -99,6 +99,7 @@ public class RunService {
         }
         String requestId = MDC.get("request_id") == null ? UUID.randomUUID().toString() : MDC.get("request_id");
         String finalTrace = traceId;
+        String finalSpan = com.aegistrace.observability.W3cTraceContext.spanId(span.context().spanId());
         tx.executeWithoutResult(status -> {
             jdbc.query("select pg_advisory_xact_lock(hashtextextended(:key, 0))",
                     Map.of("key", "run:" + actor.id()), rs -> null);
@@ -126,6 +127,7 @@ public class RunService {
                             ? null : UUID.fromString(knowledgeVersionId.toString()))
                     .addValue("requestId", requestId)
                     .addValue("traceId", finalTrace)
+                    .addValue("spanId", finalSpan)
                     .addValue("question", question.trim())
                     .addValue("provider", version.provider())
                     .addValue("model", version.model())
@@ -134,10 +136,10 @@ public class RunService {
             jdbc.update("""
                     insert into agent_runs (
                         id, workspace_id, user_id, agent_id, agent_version_id, prompt_version_id, knowledge_base_id,
-                        knowledge_base_version_id, request_id, trace_id, state, question, provider, model, snapshot, timeout_at
+                        knowledge_base_version_id, request_id, trace_id, span_id, state, question, provider, model, snapshot, timeout_at
                     ) values (
                         :id, :workspaceId, :userId, :agentId, :agentVersionId, :promptVersionId, :knowledgeBaseId,
-                        :knowledgeBaseVersionId, :requestId, :traceId, 'QUEUED', :question, :provider, :model, :snapshot, :timeoutAt
+                        :knowledgeBaseVersionId, :requestId, :traceId, :spanId, 'QUEUED', :question, :provider, :model, :snapshot, :timeoutAt
                     )
                     """, params);
             audit.record(workspaceId, actor.id(), "RUN_CREATED", "agent_run", runId.toString(), runId, Map.of(
@@ -406,7 +408,7 @@ public class RunService {
                 payload.put("approvalId", approvalId);
                 payload.put("workspaceId", workspaceId);
                 payload.put("tool", row.toolName());
-                payload.put("traceId", jdbc.queryForObject("select trace_id from agent_runs where id = :id", Map.of("id", runId), String.class));
+                putTrace(payload, runId);
                 payload.put("arguments", Jsons.map(mapper, row.arguments()));
                 jdbc.update("""
                         insert into jobs (id, workspace_id, job_type, payload, status, max_attempts, idempotency_key)
@@ -781,11 +783,27 @@ public class RunService {
         return ids;
     }
 
+    private void putTrace(Map<String, Object> payload, UUID runId) {
+        var rows = jdbc.query("select trace_id, span_id from agent_runs where id = :id", Map.of("id", runId),
+                (rs, n) -> new String[]{rs.getString("trace_id"), rs.getString("span_id")});
+        if (rows.isEmpty()) {
+            return;
+        }
+        if (rows.get(0)[0] != null) {
+            payload.put("traceId", rows.get(0)[0]);
+        }
+        if (rows.get(0)[1] != null) {
+            payload.put("spanId", rows.get(0)[1]);
+        }
+    }
+
     private void enqueueEvaluation(UUID runId) {
         var span = tracer.nextSpan().name("aegistrace.evaluation.enqueue").start();
         try {
             UUID workspaceId = jdbc.queryForObject("select workspace_id from agent_runs where id = :id", Map.of("id", runId), UUID.class);
-            String traceId = jdbc.queryForObject("select trace_id from agent_runs where id = :id", Map.of("id", runId), String.class);
+            var payload = new java.util.LinkedHashMap<String, Object>();
+            payload.put("runId", runId);
+            putTrace(payload, runId);
             jdbc.update("""
                     insert into jobs (id, workspace_id, job_type, payload, status, max_attempts, idempotency_key)
                     values (:id, :workspace, 'EVALUATE_RUN', :payload, 'PENDING', 3, :key)
@@ -793,7 +811,7 @@ public class RunService {
                     """, new MapSqlParameterSource()
                     .addValue("id", UUID.randomUUID())
                     .addValue("workspace", workspaceId)
-                    .addValue("payload", Jsons.jsonb(Jsons.write(mapper, Map.of("runId", runId, "traceId", traceId == null ? "" : traceId))))
+                    .addValue("payload", Jsons.jsonb(Jsons.write(mapper, payload)))
                     .addValue("key", "eval:" + runId));
             span.tag("run.id", runId.toString());
         } finally {

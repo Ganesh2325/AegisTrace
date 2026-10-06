@@ -48,6 +48,12 @@ public class JaegerClient {
                 return TraceFetch.empty();
             }
             return TraceFetch.ok(spans);
+        } catch (org.springframework.web.client.RestClientResponseException ex) {
+            if (ex.getStatusCode().value() == 404) {
+                return TraceFetch.empty();
+            }
+            log.warn("jaeger_unavailable error_type={}", ex.getClass().getSimpleName());
+            return TraceFetch.unavailable("The trace backend did not respond.");
         } catch (RestClientException ex) {
             log.warn("jaeger_unavailable error_type={}", ex.getClass().getSimpleName());
             return TraceFetch.unavailable("The trace backend did not respond.");
@@ -90,6 +96,19 @@ public class JaegerClient {
             log.warn("prometheus_unavailable error_type={}", ex.getClass().getSimpleName());
             return "UNAVAILABLE";
         }
+    }
+
+    static String parentSpanId(JsonNode span) {
+        JsonNode references = span.path("references");
+        if (!references.isArray() || references.isEmpty()) {
+            return "";
+        }
+        for (JsonNode reference : references) {
+            if ("CHILD_OF".equals(reference.path("refType").asText())) {
+                return reference.path("spanID").asText("");
+            }
+        }
+        return references.get(0).path("spanID").asText("");
     }
 
     static List<Map<String, Object>> parse(JsonNode body) {
@@ -137,8 +156,7 @@ public class JaegerClient {
                     || "2".equals(String.valueOf(tags.getOrDefault("otel.status_code", "")));
             var row = new LinkedHashMap<String, Object>();
             row.put("spanId", span.path("spanID").asText(""));
-            row.put("parentSpanId", span.path("references").isArray() && span.get("references").size() > 0
-                    ? span.get("references").get(0).path("spanID").asText("") : "");
+            row.put("parentSpanId", parentSpanId(span));
             row.put("name", span.path("operationName").asText(""));
             row.put("service", service);
             row.put("kind", "TELEMETRY");

@@ -85,7 +85,7 @@ export default function TraceDetailPage() {
                   <li key={item.spanId}>
                     <button type="button" className="w-full rounded-md border border-line px-2 py-2 text-left hover:bg-white/[0.03] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent" onClick={() => setSpan(item)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setSpan(item); } }}>
                       <div className="flex items-center justify-between gap-2 text-xs">
-                        <span>{item.name}</span>
+                        <span className="min-w-0 truncate" style={{ paddingLeft: Math.min(item.depth, 6) * 12 }}>{item.name}</span>
                         <span className="text-muted">{formatDuration(item.durationMs)}</span>
                       </div>
                       <div className="relative mt-1 h-2 rounded bg-canvas">
@@ -101,7 +101,7 @@ export default function TraceDetailPage() {
                   <li key={item.spanId}>
                     <button type="button" className="w-full rounded-md border border-line px-3 py-2 text-left" onClick={() => setSpan(item)}>
                       <div className="flex items-center justify-between">
-                        <span className="text-sm">{item.name}</span>
+                        <span className="min-w-0 truncate text-sm" style={{ paddingLeft: Math.min(item.depth, 4) * 10 }}>{item.name}</span>
                         <StatusBadge status={item.status} />
                       </div>
                       <p className="text-xs text-muted">{item.service} · {formatDuration(item.durationMs)}</p>
