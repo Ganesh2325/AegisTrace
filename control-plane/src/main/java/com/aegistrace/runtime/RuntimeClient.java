@@ -25,6 +25,33 @@ public class RuntimeClient {
         this.mapper = mapper;
     }
 
+    public List<Map<String, Object>> retrieve(Map<String, Object> body) {
+        var factory = new SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout(Duration.ofSeconds(3));
+        factory.setReadTimeout(Duration.ofSeconds(15));
+        RestClient client = RestClient.builder()
+                .baseUrl(properties.getRuntimeUrl())
+                .requestFactory(factory)
+                .build();
+        try {
+            JsonNode node = client.post()
+                    .uri("/v1/retrieve")
+                    .header("X-Internal-Token", properties.getInternalToken())
+                    .body(body)
+                    .retrieve()
+                    .body(JsonNode.class);
+            var hits = new ArrayList<Map<String, Object>>();
+            if (node != null && node.has("hits") && node.get("hits").isArray()) {
+                node.get("hits").forEach(item -> hits.add(mapper.convertValue(item, Map.class)));
+            }
+            return hits;
+        } catch (RestClientResponseException ex) {
+            throw new RuntimeCallException("DEPENDENCY_UNAVAILABLE", "Retrieval is unavailable.", false);
+        } catch (ResourceAccessException ex) {
+            throw new RuntimeCallException("DEPENDENCY_UNAVAILABLE", "Retrieval timed out.", true);
+        }
+    }
+
     public Plan plan(Map<String, Object> body, int timeoutMs) {
         var factory = new SimpleClientHttpRequestFactory();
         factory.setConnectTimeout(Duration.ofSeconds(3));

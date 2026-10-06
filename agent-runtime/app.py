@@ -26,6 +26,7 @@ class PlanRequest(BaseModel):
     workspaceId: str
     question: str
     knowledgeBaseId: str
+    knowledgeBaseVersionId: str | None = None
     embeddingModel: str
     systemPrompt: str
     provider: str
@@ -34,6 +35,15 @@ class PlanRequest(BaseModel):
     maxTokens: int = 900
     allowedTools: list[str] = []
     simulate: str | None = None
+
+
+class RetrieveRequest(BaseModel):
+    workspaceId: str
+    knowledgeBaseId: str
+    knowledgeBaseVersionId: str | None = None
+    embeddingModel: str
+    query: str
+    topK: int = 5
 
 
 @app.get("/liveness")
@@ -59,7 +69,7 @@ def plan(body: PlanRequest, x_internal_token: str = Header(default="")):
     if body.simulate == "model_timeout":
         time.sleep(30)
     started = time.perf_counter()
-    chunks = _load_chunks(body.knowledgeBaseId, body.embeddingModel)
+    chunks = _load_chunks(body.workspaceId, body.knowledgeBaseId, body.knowledgeBaseVersionId, body.embeddingModel)
     retrieval_ms = int((time.perf_counter() - started) * 1000)
     ranked = rank_chunks(body.question, chunks, k=4)
     grounded = grounded_answer(body.question, ranked)
@@ -105,15 +115,64 @@ def plan(body: PlanRequest, x_internal_token: str = Header(default="")):
     }
 
 
-def _load_chunks(knowledge_base_id: str, embedding_model: str) -> list[dict]:
+@app.post("/v1/retrieve")
+def retrieve(body: RetrieveRequest, x_internal_token: str = Header(default="")):
+    if TOKEN and x_internal_token != TOKEN:
+        raise HTTPException(status_code=401, detail="Internal token is invalid.")
+    query = (body.query or "").strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="A retrieval query is required.")
+    if len(query) > 2000:
+        raise HTTPException(status_code=400, detail="Queries are limited to 2000 characters.")
+    top_k = body.topK if body.topK is not None else 5
+    if top_k < 1 or top_k > 20:
+        raise HTTPException(status_code=400, detail="topK must be between 1 and 20.")
+    started = time.perf_counter()
+    chunks = _load_chunks(body.workspaceId, body.knowledgeBaseId, body.knowledgeBaseVersionId, body.embeddingModel)
+    ranked = rank_chunks(query, chunks, k=top_k)
+    hits = []
+    for chunk in ranked:
+        hits.append({
+            "documentId": chunk["document_id"],
+            "documentTitle": chunk["document_title"],
+            "chunkId": chunk["chunk_id"],
+            "section": chunk.get("section") or "",
+            "page": chunk.get("page_number"),
+            "quote": chunk["content"][:500],
+            "fusionScore": round(float(chunk.get("fusion_score") or 0), 4),
+            "vectorScore": round(float(chunk.get("vector_score") or 0), 4),
+            "lexicalScore": round(float(chunk.get("lexical_score") or 0), 4),
+            "score": round(float(chunk.get("score") or 0), 4),
+        })
+    return {
+        "hits": hits,
+        "retrievedChunkCount": len(ranked),
+        "latencyMs": int((time.perf_counter() - started) * 1000),
+    }
+
+
+def _load_chunks(workspace_id: str, knowledge_base_id: str, knowledge_base_version_id: str | None, embedding_model: str) -> list[dict]:
     sql = """
         select c.id, c.document_id, d.title, c.section, c.page_number, c.content, c.embedding::text
         from document_chunks c
         join documents d on d.id = c.document_id
-        where d.knowledge_base_id = %s and d.status = 'ACTIVE' and c.embedding_model = %s
+        join knowledge_bases kb on kb.id = d.knowledge_base_id
+        join knowledge_version_documents kvd on kvd.document_id = d.id
+        join knowledge_base_versions kv on kv.id = kvd.knowledge_base_version_id
+        where kb.workspace_id = %s
+          and d.knowledge_base_id = %s
+          and kv.id = coalesce(%s::uuid, (
+              select id from knowledge_base_versions
+              where knowledge_base_id = %s and current_version
+              limit 1
+          ))
+          and c.embedding_model = %s
     """
     with psycopg.connect(DATABASE_URL) as conn:
-        rows = conn.execute(sql, (knowledge_base_id, embedding_model)).fetchall()
+        rows = conn.execute(
+            sql,
+            (workspace_id, knowledge_base_id, knowledge_base_version_id, knowledge_base_id, embedding_model),
+        ).fetchall()
     chunks = []
     for row in rows:
         chunks.append({
@@ -125,8 +184,6 @@ def _load_chunks(knowledge_base_id: str, embedding_model: str) -> list[dict]:
             "content": row[5],
             "embedding": _parse_vector(row[6]),
         })
-    if chunks and embedding_model != "feature-hash-v1":
-        return chunks
     return chunks
 
 

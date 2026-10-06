@@ -18,7 +18,8 @@ These names mirror existing `Rbac.require` role lists. They are not a second pol
 | `approvals.read` | `GET /api/v1/approvals` | Reviewer, Admin |
 | `agents.read` | `GET /api/v1/agents` and agent detail/version reads | Operator, Reviewer, Developer, Admin |
 | `agents.configure` | Create agent, create version, activate version, change agent status, list tools | Developer, Admin |
-| `knowledge.read` | `GET /api/v1/knowledge-bases` | Operator, Developer, Admin |
+| `knowledge.read` | `GET /api/v1/knowledge-bases` and document/retrieval reads | Operator, Developer, Admin |
+| `knowledge.manage` | Upload documents, publish and activate knowledge versions | Developer, Admin |
 | `evaluation.read` | `GET /api/v1/evaluations` | Developer, Admin |
 | `observability.read` | `GET /api/v1/metrics/summary` | Operator, Reviewer, Developer, Admin |
 | `audit.read` | `GET /api/v1/audit` | Developer, Admin |
@@ -68,6 +69,7 @@ Why this exists stays at `/why` and is linked from the user menu, not the main g
 | `/approvals` | `approvals.read` |
 | `/agents` | `agents.read` |
 | `/knowledge` | `knowledge.read` |
+| `/knowledge/documents/{id}` | `knowledge.read` |
 | `/evaluations` | `evaluation.read` |
 | `/observability` | `observability.read` |
 | `/audit` | `audit.read` |

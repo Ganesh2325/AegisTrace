@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import socket
@@ -17,7 +18,7 @@ import psycopg
 from botocore.client import Config
 from psycopg.rows import dict_row
 
-from aegislib.chunking import chunk_markdown
+from aegislib.chunking import chunk_pages, normalize_text
 from aegislib.embedding import MODEL_ID, embed, to_pgvector
 from aegislib.execution import ExecutionError, execute_ticket
 from aegislib.retries import backoff_seconds, classify_retry
@@ -218,21 +219,31 @@ def embed_document(document_id: str) -> None:
         doc = conn.execute("select * from documents where id = %s", (document_id,)).fetchone()
         if doc is None:
             raise ExecutionError("INVALID_ARGUMENTS", "Document does not exist.", False)
-        if doc["status"] == "ACTIVE":
+        locked = conn.execute(
+            "select exists(select 1 from knowledge_version_documents where document_id = %s) as locked",
+            (document_id,),
+        ).fetchone()["locked"]
+        if doc["status"] == "ACTIVE" and locked:
             return
-        conn.execute("update documents set status = 'PROCESSING' where id = %s", (document_id,))
+        conn.execute("update documents set status = 'PROCESSING', error_message = null where id = %s", (document_id,))
         kb = conn.execute("select embedding_model from knowledge_bases where id = %s", (doc["knowledge_base_id"],)).fetchone()
         conn.commit()
     try:
-        text = read_document_text(doc)
-        pieces = chunk_markdown(text)
+        pages = read_document_pages(doc)
+        pieces = chunk_pages(pages)
+        if not pieces:
+            raise ExecutionError("EXTRACTION_FAILED", "No text could be extracted from the document.", False)
         model = kb["embedding_model"] if kb else MODEL_ID
         if model != MODEL_ID:
             raise ExecutionError("INVALID_ARGUMENTS", "This worker embeds with feature-hash-v1 only.", False)
         with connect() as conn:
+            if locked:
+                raise ExecutionError("CONFLICT", "Published knowledge versions cannot be re-embedded in place.", False)
             conn.execute("delete from document_chunks where document_id = %s", (document_id,))
+            batch = []
             for piece in pieces:
-                vector = embed(piece["content"])
+                batch.append((piece, embed(piece["content"])))
+            for piece, vector in batch:
                 conn.execute(
                     """
                     insert into document_chunks (
@@ -253,17 +264,28 @@ def embed_document(document_id: str) -> None:
         raise
 
 
-def read_document_text(doc) -> str:
+def read_document_pages(doc) -> list[tuple[int | None, str]]:
     key = doc["storage_key"]
     if key.startswith("seed://"):
-        return (SEED_DIR / key.removeprefix("seed://")).read_text(encoding="utf-8")
+        text = (SEED_DIR / key.removeprefix("seed://")).read_text(encoding="utf-8")
+        return [(None, normalize_text(text))]
     if doc["media_type"] == "application/pdf":
         data = download(key)
         from pypdf import PdfReader
         import io
         reader = PdfReader(io.BytesIO(data))
-        return "\n".join(page.extract_text() or "" for page in reader.pages)
-    return download(key).decode("utf-8")
+        pages = []
+        for index, page in enumerate(reader.pages, start=1):
+            pages.append((index, normalize_text(page.extract_text() or "")))
+        if not any(text for _, text in pages):
+            raise ExecutionError("EXTRACTION_FAILED", "The PDF contained no extractable text.", False)
+        return pages
+    text = download(key).decode("utf-8")
+    return [(None, normalize_text(text))]
+
+
+def read_document_text(doc) -> str:
+    return "\n\n".join(text for _, text in read_document_pages(doc) if text)
 
 
 def download(key: str) -> bytes:
@@ -288,6 +310,7 @@ def seed_knowledge() -> None:
         kb = conn.execute("select id from knowledge_bases where slug = 'support-policies'").fetchone()
         if kb is None:
             return
+        kb_id = str(kb["id"])
         count = conn.execute(
             """
             select count(*) as n from documents
@@ -296,25 +319,75 @@ def seed_knowledge() -> None:
             (kb["id"],),
         ).fetchone()["n"]
         if count >= 11:
+            refresh_seed_checksums()
+            attach_current_version_if_empty(kb_id)
             return
         workspace = conn.execute("select workspace_id from knowledge_bases where id = %s", (kb["id"],)).fetchone()["workspace_id"]
         for path in sorted(SEED_DIR.glob("*.md")):
             document_id = str(uuid.uuid5(uuid.NAMESPACE_URL, path.name))
-            title = path.read_text(encoding="utf-8").splitlines()[0].lstrip("# ").strip()
+            raw = path.read_bytes()
+            title = raw.decode("utf-8").splitlines()[0].lstrip("# ").strip()
+            checksum = hashlib.sha256(raw).hexdigest()
             conn.execute(
                 """
                 insert into documents (
-                    id, workspace_id, knowledge_base_id, title, media_type, storage_key, checksum_sha256, status
-                ) values (%s, %s, %s, %s, 'text/markdown', %s, %s, 'UPLOADED')
+                    id, workspace_id, knowledge_base_id, title, media_type, storage_key, checksum_sha256, byte_size, status
+                ) values (%s, %s, %s, %s, 'text/markdown', %s, %s, %s, 'UPLOADED')
                 on conflict (id) do nothing
                 """,
-                (document_id, workspace, kb["id"], title, f"seed://{path.name}", "seed"),
+                (document_id, workspace, kb["id"], title, f"seed://{path.name}", checksum, len(raw)),
             )
         conn.commit()
     with connect() as conn:
         docs = conn.execute("select id from documents where status = 'UPLOADED' and storage_key like 'seed://%'").fetchall()
     for doc in docs:
         embed_document(str(doc["id"]))
+    attach_current_version_if_empty(kb_id)
+
+
+def refresh_seed_checksums() -> None:
+    with connect() as conn:
+        for path in sorted(SEED_DIR.glob("*.md")):
+            raw = path.read_bytes()
+            checksum = hashlib.sha256(raw).hexdigest()
+            conn.execute(
+                """
+                update documents
+                set checksum_sha256 = %s, byte_size = %s
+                where storage_key = %s and (checksum_sha256 = 'seed' or byte_size = 0)
+                """,
+                (checksum, len(raw), f"seed://{path.name}"),
+            )
+        conn.commit()
+
+
+def attach_current_version_if_empty(knowledge_base_id: str) -> None:
+    with connect() as conn:
+        current = conn.execute(
+            """
+            select id from knowledge_base_versions
+            where knowledge_base_id = %s and current_version
+            """,
+            (knowledge_base_id,),
+        ).fetchone()
+        if current is None:
+            return
+        members = conn.execute(
+            "select count(*) as n from knowledge_version_documents where knowledge_base_version_id = %s",
+            (current["id"],),
+        ).fetchone()["n"]
+        if members > 0:
+            return
+        conn.execute(
+            """
+            insert into knowledge_version_documents (knowledge_base_version_id, document_id)
+            select %s, id from documents
+            where knowledge_base_id = %s and status = 'ACTIVE'
+            on conflict do nothing
+            """,
+            (current["id"], knowledge_base_id),
+        )
+        conn.commit()
 
 
 def evaluate_run(run_id: str) -> None:

@@ -29,6 +29,7 @@ public class DevSeedRunner implements ApplicationRunner {
     public static final UUID PROMPT = UUID.fromString("33333333-3333-3333-3333-333333333302");
     public static final UUID VERSION = UUID.fromString("33333333-3333-3333-3333-333333333303");
     public static final UUID KNOWLEDGE = UUID.fromString("44444444-4444-4444-4444-444444444401");
+    public static final UUID KNOWLEDGE_VERSION = UUID.fromString("44444444-4444-4444-4444-444444444402");
     public static final UUID SEARCH = UUID.fromString("55555555-5555-5555-5555-555555555501");
     public static final UUID TICKET = UUID.fromString("55555555-5555-5555-5555-555555555502");
 
@@ -81,6 +82,10 @@ public class DevSeedRunner implements ApplicationRunner {
                 values (:id, :workspace, 'Support policies', 'support-policies', 'feature-hash-v1', 384)
                 """, Map.of("id", KNOWLEDGE, "workspace", WORKSPACE));
         jdbc.update("""
+                insert into knowledge_base_versions (id, knowledge_base_id, version_number, current_version, created_by)
+                values (:id, :kb, 1, true, :user)
+                """, Map.of("id", KNOWLEDGE_VERSION, "kb", KNOWLEDGE, "user", DEVELOPER));
+        jdbc.update("""
                 insert into agents (id, workspace_id, name, description, status, created_by)
                 values (:id, :workspace, 'Support agent', 'Answers policy questions and proposes tickets.', 'ACTIVE', :user)
                 """, Map.of("id", AGENT, "workspace", WORKSPACE, "user", DEVELOPER));
@@ -100,22 +105,26 @@ public class DevSeedRunner implements ApplicationRunner {
         snapshot.put("tokenBudget", 8000);
         snapshot.put("systemPrompt", PROMPT_TEXT);
         snapshot.put("knowledgeBaseId", KNOWLEDGE.toString());
+        snapshot.put("knowledgeBaseVersionId", KNOWLEDGE_VERSION.toString());
+        snapshot.put("knowledgeVersion", 1);
         snapshot.put("embeddingModel", "feature-hash-v1");
         snapshot.put("tools", List.of("search_knowledge", "create_support_ticket"));
         snapshot.put("environment", properties.getEnvironment());
         jdbc.update("""
                 insert into agent_versions (
                     id, agent_id, version_number, provider, model, temperature, max_tokens, timeout_ms, max_tool_calls,
-                    cost_budget_usd, prompt_version_id, knowledge_base_id, environment, current_version, snapshot, created_by
+                    cost_budget_usd, prompt_version_id, knowledge_base_id, knowledge_base_version_id, environment,
+                    current_version, snapshot, created_by
                 ) values (
                     :id, :agent, 1, 'grounded-extractive', 'grounded-extractive-v1', 0, 900, 60000, 3,
-                    0.50, :prompt, :kb, :environment, true, :snapshot, :user
+                    0.50, :prompt, :kb, :kbVersion, :environment, true, :snapshot, :user
                 )
                 """, new MapSqlParameterSource()
                 .addValue("id", VERSION)
                 .addValue("agent", AGENT)
                 .addValue("prompt", PROMPT)
                 .addValue("kb", KNOWLEDGE)
+                .addValue("kbVersion", KNOWLEDGE_VERSION)
                 .addValue("environment", properties.getEnvironment())
                 .addValue("snapshot", Jsons.jsonb(Jsons.write(mapper, snapshot)))
                 .addValue("user", DEVELOPER));

@@ -94,12 +94,12 @@ class AgentController {
     public record VersionRequest(
             String provider, String model, double temperature, int maxTokens, int timeoutMs, int maxToolCalls,
             BigDecimal costBudgetUsd, int tokenBudget, String systemPrompt, String promptVersionId, String knowledgeBaseId,
-            List<String> toolNames, String environment
+            String knowledgeBaseVersionId, List<String> toolNames, String environment
     ) {
         AgentService.CreateVersion toCreate() {
             return new AgentService.CreateVersion(
                     provider, model, temperature, maxTokens, timeoutMs, maxToolCalls, costBudgetUsd, tokenBudget,
-                    systemPrompt, promptVersionId, knowledgeBaseId, toolNames, environment);
+                    systemPrompt, promptVersionId, knowledgeBaseId, knowledgeBaseVersionId, toolNames, environment);
         }
     }
 }

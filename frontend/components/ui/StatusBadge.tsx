@@ -23,6 +23,11 @@ export const STATUSES = {
   NO_DATA: { label: "No data", tone: "muted", icon: "alert" },
   UNAVAILABLE: { label: "Unavailable", tone: "warning", icon: "alert" },
   PROCESSING: { label: "Processing", tone: "info", icon: "dot" },
+  UPLOADED: { label: "Uploaded", tone: "muted", icon: "clock" },
+  DISABLED: { label: "Disabled", tone: "muted", icon: "dot" },
+  EMBEDDED: { label: "Embedded", tone: "success", icon: "check" },
+  NOT_EMBEDDED: { label: "Not embedded", tone: "muted", icon: "dot" },
+  EMBEDDING: { label: "Embedding", tone: "info", icon: "dot" },
 } as const;
 
 export type StatusName = keyof typeof STATUSES;

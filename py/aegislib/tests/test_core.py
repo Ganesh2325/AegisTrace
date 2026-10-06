@@ -1,3 +1,4 @@
+from aegislib.chunking import chunk_markdown, chunk_pages
 from aegislib.embedding import embed, cosine
 from aegislib.grounding import ABSTAIN, grounded_answer, rank_chunks
 from aegislib.planner import merge_model_proposal, propose_tool
@@ -6,6 +7,18 @@ from aegislib.retries import backoff_seconds, classify_retry
 from corpus import load_corpus
 
 QUESTION = "Why was my application rejected, and what should I do before reapplying?"
+
+
+def test_markdown_chunks_do_not_invent_page_numbers():
+    chunks = chunk_markdown("# Refunds\n\nRefunds are issued within five business days.")
+    assert chunks
+    assert all(chunk["page_number"] is None for chunk in chunks)
+
+
+def test_pdf_page_numbers_are_preserved():
+    chunks = chunk_pages([(2, "Application review requires a complete file.")])
+    assert chunks[0]["page_number"] == 2
+    assert chunks[0]["chunk_index"] == 0
 
 
 def test_embeddings_are_deterministic_and_normalized():

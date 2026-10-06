@@ -14,7 +14,11 @@ assert.equal(canAccess("DEVELOPER", "runs.create"), false);
 assert.equal(canAccess("OPERATOR", "agents.configure"), false);
 assert.equal(canAccess("REVIEWER", "agents.configure"), false);
 assert.equal(canAccess("DEVELOPER", "agents.configure"), true);
-assert.equal(canAccess("ADMIN", "agents.configure"), true);
+assert.equal(canAccess("OPERATOR", "knowledge.manage"), false);
+assert.equal(canAccess("DEVELOPER", "knowledge.manage"), true);
+assert.equal(canAccess("REVIEWER", "knowledge.read"), false);
+assert.equal(commandsFor("DEVELOPER", "upload")[0]?.href, "/knowledge?upload=1");
+assert.deepEqual(breadcrumb("DEVELOPER", "/knowledge/documents/abc").map((c) => c.label), ["Knowledge", "Document"]);
 assert.deepEqual(breadcrumb("OPERATOR", "/agents/abc").map((c) => c.label), ["Agents", "Agent"]);
 assert.equal(canAccess("GUEST", "overview.read"), false);
 

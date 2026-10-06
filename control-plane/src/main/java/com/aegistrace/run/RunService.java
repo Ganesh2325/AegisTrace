@@ -110,6 +110,7 @@ public class RunService {
             }
             AgentVersion version = loadVersion(workspaceId, agentId);
             var snapshot = version.snapshot();
+            Object knowledgeVersionId = snapshot.get("knowledgeBaseVersionId");
             var params = new MapSqlParameterSource()
                     .addValue("id", runId)
                     .addValue("workspaceId", workspaceId)
@@ -118,6 +119,8 @@ public class RunService {
                     .addValue("agentVersionId", version.id())
                     .addValue("promptVersionId", version.promptVersionId())
                     .addValue("knowledgeBaseId", version.knowledgeBaseId())
+                    .addValue("knowledgeBaseVersionId", knowledgeVersionId == null || knowledgeVersionId.toString().isBlank()
+                            ? null : UUID.fromString(knowledgeVersionId.toString()))
                     .addValue("requestId", requestId)
                     .addValue("traceId", finalTrace)
                     .addValue("question", question.trim())
@@ -128,10 +131,10 @@ public class RunService {
             jdbc.update("""
                     insert into agent_runs (
                         id, workspace_id, user_id, agent_id, agent_version_id, prompt_version_id, knowledge_base_id,
-                        request_id, trace_id, state, question, provider, model, snapshot, timeout_at
+                        knowledge_base_version_id, request_id, trace_id, state, question, provider, model, snapshot, timeout_at
                     ) values (
                         :id, :workspaceId, :userId, :agentId, :agentVersionId, :promptVersionId, :knowledgeBaseId,
-                        :requestId, :traceId, 'QUEUED', :question, :provider, :model, :snapshot, :timeoutAt
+                        :knowledgeBaseVersionId, :requestId, :traceId, 'QUEUED', :question, :provider, :model, :snapshot, :timeoutAt
                     )
                     """, params);
             audit.record(workspaceId, actor.id(), "RUN_CREATED", "agent_run", runId.toString(), runId, Map.of(
@@ -587,6 +590,7 @@ public class RunService {
         body.put("workspaceId", run.workspaceId());
         body.put("question", run.question());
         body.put("knowledgeBaseId", snapshot.get("knowledgeBaseId"));
+        body.put("knowledgeBaseVersionId", snapshot.get("knowledgeBaseVersionId"));
         body.put("embeddingModel", snapshot.get("embeddingModel"));
         body.put("systemPrompt", snapshot.get("systemPrompt"));
         body.put("provider", snapshot.get("provider"));

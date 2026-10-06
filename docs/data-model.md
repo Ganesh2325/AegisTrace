@@ -1,6 +1,6 @@
 # Data Model
 
-PostgreSQL is the system of record. Flyway migration `V1__init.sql` is the schema. Embeddings are `vector(384)`. A knowledge base is pinned to one embedding model so vectors are comparable.
+PostgreSQL is the system of record. Flyway migrations `V1__init.sql` and `V3__knowledge_versions.sql` are the schema. Embeddings are `vector(384)`. A knowledge base is pinned to one embedding model so vectors are comparable.
 
 ## Identity and access
 
@@ -13,17 +13,18 @@ PostgreSQL is the system of record. Flyway migration `V1__init.sql` is the schem
 
 - `agents` — name, status `ACTIVE` or `INACTIVE`.
 - `prompt_versions` — immutable prompt text, monotonic version per agent.
-- `agent_versions` — immutable model settings, budgets, knowledge base id, prompt version id, full JSON snapshot.
+- `agent_versions` — immutable model settings, budgets, knowledge base id, knowledge base version id, prompt version id, full JSON snapshot.
 - `tools` — registry. Seeded with the two MVP tools only.
 - `agent_version_tools` — allowlist for that version.
-- `knowledge_bases` — embedding model id and dimension.
-
-Changing configuration inserts a new version. It does not update the previous row.
-
 ## Knowledge
 
-- `documents` — original object key, status, checksum. Status moves `UPLOADED -> PROCESSING -> ACTIVE` or `FAILED`.
-- `document_chunks` — text, section, page, embedding, generated `tsvector`.
+- `knowledge_bases` — embedding model id and dimension.
+- `knowledge_base_versions` — monotonic corpus snapshot, one current version per base.
+- `knowledge_version_documents` — documents that belong to a version.
+- `documents` — original object key, checksum, byte size, status. Status moves `UPLOADED -> PROCESSING -> ACTIVE` or `FAILED`.
+- `document_chunks` — text, section, page, embedding, embedding model, generated `tsvector`.
+
+See `docs/knowledge-rag.md`.
 
 ## Execution
 

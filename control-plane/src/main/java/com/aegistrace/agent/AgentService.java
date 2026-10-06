@@ -3,6 +3,7 @@ package com.aegistrace.agent;
 import com.aegistrace.audit.AuditService;
 import com.aegistrace.common.ApiException;
 import com.aegistrace.common.Jsons;
+import com.aegistrace.knowledge.KnowledgeService;
 import com.aegistrace.security.Actor;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
@@ -22,12 +23,15 @@ public class AgentService {
     private final TransactionTemplate tx;
     private final ObjectMapper mapper;
     private final AuditService audit;
+    private final KnowledgeService knowledge;
 
-    public AgentService(NamedParameterJdbcTemplate jdbc, TransactionTemplate tx, ObjectMapper mapper, AuditService audit) {
+    public AgentService(NamedParameterJdbcTemplate jdbc, TransactionTemplate tx, ObjectMapper mapper, AuditService audit,
+                        KnowledgeService knowledge) {
         this.jdbc = jdbc;
         this.tx = tx;
         this.mapper = mapper;
         this.audit = audit;
+        this.knowledge = knowledge;
     }
 
     public List<Map<String, Object>> list(UUID workspaceId) {
@@ -181,18 +185,22 @@ public class AgentService {
             snapshot.put("costBudgetUsd", body.costBudgetUsd());
             snapshot.put("tokenBudget", body.tokenBudget());
             snapshot.put("systemPrompt", promptText);
+            var knowledgeRef = knowledge.resolveKnowledgeVersion(workspaceId, body.knowledgeBaseId(), body.knowledgeBaseVersionId());
             snapshot.put("knowledgeBaseId", body.knowledgeBaseId());
-            snapshot.put("embeddingModel", embeddingModel(body.knowledgeBaseId(), workspaceId));
+            snapshot.put("knowledgeBaseVersionId", knowledgeRef.get("knowledgeBaseVersionId").toString());
+            snapshot.put("knowledgeVersion", knowledgeRef.get("knowledgeVersion"));
+            snapshot.put("embeddingModel", knowledgeRef.get("embeddingModel"));
             snapshot.put("tools", body.toolNames());
             snapshot.put("environment", body.environment());
             snapshot.put("promptVersionId", promptId.toString());
             jdbc.update("""
                     insert into agent_versions (
                         id, agent_id, version_number, provider, model, temperature, max_tokens, timeout_ms, max_tool_calls,
-                        cost_budget_usd, prompt_version_id, knowledge_base_id, environment, current_version, snapshot, created_by
+                        cost_budget_usd, prompt_version_id, knowledge_base_id, knowledge_base_version_id, environment,
+                        current_version, snapshot, created_by
                     ) values (
                         :id, :agent, :version, :provider, :model, :temperature, :maxTokens, :timeoutMs, :maxToolCalls,
-                        :budget, :prompt, :kb, :environment, false, :snapshot, :user
+                        :budget, :prompt, :kb, :kbVersion, :environment, false, :snapshot, :user
                     )
                     """, new MapSqlParameterSource()
                     .addValue("id", versionId)
@@ -207,6 +215,7 @@ public class AgentService {
                     .addValue("budget", body.costBudgetUsd())
                     .addValue("prompt", promptId)
                     .addValue("kb", UUID.fromString(body.knowledgeBaseId()))
+                    .addValue("kbVersion", knowledgeRef.get("knowledgeBaseVersionId"))
                     .addValue("environment", body.environment())
                     .addValue("snapshot", Jsons.jsonb(Jsons.write(mapper, snapshot)))
                     .addValue("user", actor.id()));
@@ -266,6 +275,7 @@ public class AgentService {
                 select av.id, av.version_number, av.provider, av.model, av.temperature, av.max_tokens, av.timeout_ms,
                        av.max_tool_calls, av.cost_budget_usd, av.environment, av.current_version, av.created_at,
                        av.snapshot::text as snapshot, av.prompt_version_id, av.knowledge_base_id,
+                       av.knowledge_base_version_id, kv.version_number as knowledge_version,
                        pv.version_number as prompt_number, kb.name as knowledge_name, u.email as created_by_email,
                        (select count(*) from agent_runs r where r.agent_version_id = av.id) as used_by_runs,
                        (select count(*) from agent_version_tools avt where avt.agent_version_id = av.id) as tool_count
@@ -273,6 +283,7 @@ public class AgentService {
                 join agents a on a.id = av.agent_id
                 join prompt_versions pv on pv.id = av.prompt_version_id
                 join knowledge_bases kb on kb.id = av.knowledge_base_id
+                left join knowledge_base_versions kv on kv.id = av.knowledge_base_version_id
                 join users u on u.id = av.created_by
                 where av.agent_id = :id and a.workspace_id = :workspace
                 order by av.version_number desc
@@ -285,6 +296,7 @@ public class AgentService {
                 select av.id, av.version_number, av.provider, av.model, av.temperature, av.max_tokens, av.timeout_ms,
                        av.max_tool_calls, av.cost_budget_usd, av.environment, av.current_version, av.created_at,
                        av.snapshot::text as snapshot, av.prompt_version_id, av.knowledge_base_id,
+                       av.knowledge_base_version_id, kv.version_number as knowledge_version,
                        pv.version_number as prompt_number, kb.name as knowledge_name, u.email as created_by_email,
                        (select count(*) from agent_runs r where r.agent_version_id = av.id) as used_by_runs,
                        (select count(*) from agent_version_tools avt where avt.agent_version_id = av.id) as tool_count
@@ -292,6 +304,7 @@ public class AgentService {
                 join agents a on a.id = av.agent_id
                 join prompt_versions pv on pv.id = av.prompt_version_id
                 join knowledge_bases kb on kb.id = av.knowledge_base_id
+                left join knowledge_base_versions kv on kv.id = av.knowledge_base_version_id
                 join users u on u.id = av.created_by
                 where av.agent_id = :agent and av.id = :version and a.workspace_id = :workspace
                 """, Map.of("agent", agentId, "version", versionId, "workspace", workspaceId), (rs, n) -> versionRow(rs));
@@ -364,8 +377,9 @@ public class AgentService {
         row.put("promptVersionNumber", rs.getInt("prompt_number"));
         row.put("knowledgeBaseId", UUID.fromString(rs.getString("knowledge_base_id")));
         row.put("knowledgeName", rs.getString("knowledge_name"));
-        row.put("knowledgeVersion", null);
-        row.put("knowledgeVersionStatus", "NOT_PERSISTED");
+        row.put("knowledgeBaseVersionId", rs.getString("knowledge_base_version_id") == null ? null : UUID.fromString(rs.getString("knowledge_base_version_id")));
+        row.put("knowledgeVersion", rs.getObject("knowledge_version") == null ? null : rs.getInt("knowledge_version"));
+        row.put("knowledgeVersionStatus", rs.getString("knowledge_base_version_id") == null ? "MISSING" : "PINNED");
         row.put("createdAt", rs.getTimestamp("created_at").toInstant().toString());
         row.put("createdByEmail", rs.getString("created_by_email"));
         row.put("usedByRunCount", rs.getLong("used_by_runs"));
@@ -493,19 +507,9 @@ public class AgentService {
         return value == null ? 1 : value;
     }
 
-    private String embeddingModel(String knowledgeBaseId, UUID workspaceId) {
-        var rows = jdbc.query("""
-                select embedding_model from knowledge_bases where id = :id and workspace_id = :workspace
-                """, Map.of("id", UUID.fromString(knowledgeBaseId), "workspace", workspaceId), (rs, n) -> rs.getString(1));
-        if (rows.isEmpty()) {
-            throw new ApiException("NOT_FOUND", "Knowledge base not found.", 404);
-        }
-        return rows.get(0);
-    }
-
     public record CreateVersion(
             String provider, String model, double temperature, int maxTokens, int timeoutMs, int maxToolCalls,
             BigDecimal costBudgetUsd, int tokenBudget, String systemPrompt, String promptVersionId, String knowledgeBaseId,
-            List<String> toolNames, String environment
+            String knowledgeBaseVersionId, List<String> toolNames, String environment
     ) {}
 }

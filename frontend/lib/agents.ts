@@ -33,9 +33,10 @@ export type PolicyReference = {
 
 export type KnowledgeReference = {
   knowledgeBaseId: string;
+  knowledgeBaseVersionId: string | null;
   knowledgeName: string;
-  knowledgeVersion: string | null;
-  knowledgeVersionStatus: "NOT_PERSISTED" | string;
+  knowledgeVersion: number | null;
+  knowledgeVersionStatus: "PINNED" | "MISSING" | string;
 };
 
 export type PromptVersion = {
@@ -60,7 +61,8 @@ export type AgentVersion = {
   promptVersionNumber: number;
   knowledgeBaseId: string;
   knowledgeName: string;
-  knowledgeVersion: string | null;
+  knowledgeBaseVersionId: string | null;
+  knowledgeVersion: number | null;
   knowledgeVersionStatus: string;
   createdAt: string;
   createdByEmail: string;
@@ -162,6 +164,7 @@ export type CreateVersionInput = {
   systemPrompt: string;
   promptVersionId: string;
   knowledgeBaseId: string;
+  knowledgeBaseVersionId: string;
   toolNames: string[];
   environment: string;
   reusePrompt: boolean;
@@ -217,6 +220,7 @@ export function validateCreateVersion(input: CreateVersionInput): string[] {
   if (!input.model.trim()) errors.push("Model is required.");
   if (!input.environment.trim()) errors.push("Environment is required.");
   if (!input.knowledgeBaseId) errors.push("A knowledge base is required.");
+  if (!input.knowledgeBaseVersionId) errors.push("A knowledge version is required.");
   if (input.toolNames.length === 0) errors.push("At least one tool is required.");
   if (input.maxToolCalls < 1 || input.maxTokens < 1 || input.timeoutMs < 1000 || input.tokenBudget < 1) {
     errors.push("Budgets and timeouts must be positive.");
@@ -242,6 +246,7 @@ export function formFromVersion(version: AgentVersion | null, fallbackEnvironmen
     systemPrompt: "",
     promptVersionId: version?.promptVersionId || "",
     knowledgeBaseId: version?.knowledgeBaseId || "",
+    knowledgeBaseVersionId: version?.knowledgeBaseVersionId || "",
     toolNames: tools,
     environment: version?.environment || fallbackEnvironment,
     reusePrompt: Boolean(version?.promptVersionId),

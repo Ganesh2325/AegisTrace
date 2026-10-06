@@ -8,6 +8,7 @@ export type Capability =
   | "agents.read"
   | "agents.configure"
   | "knowledge.read"
+  | "knowledge.manage"
   | "evaluation.read"
   | "observability.read"
   | "audit.read"
@@ -52,6 +53,7 @@ const ALL: Capability[] = [
   "agents.read",
   "agents.configure",
   "knowledge.read",
+  "knowledge.manage",
   "evaluation.read",
   "observability.read",
   "audit.read",
@@ -61,7 +63,7 @@ const ALL: Capability[] = [
 const ROLE_CAPABILITIES: Record<Role, Capability[]> = {
   OPERATOR: ["overview.read", "runs.read", "runs.create", "agents.read", "knowledge.read", "observability.read"],
   REVIEWER: ["overview.read", "runs.read", "approvals.read", "agents.read", "observability.read"],
-  DEVELOPER: ["overview.read", "runs.read", "agents.read", "agents.configure", "knowledge.read", "evaluation.read", "observability.read", "audit.read", "admin.console"],
+  DEVELOPER: ["overview.read", "runs.read", "agents.read", "agents.configure", "knowledge.read", "knowledge.manage", "evaluation.read", "observability.read", "audit.read", "admin.console"],
   ADMIN: ALL,
 };
 
@@ -133,7 +135,18 @@ export function commandsFor(role: string, query: string): Command[] {
     href: item.href,
     keywords: `${item.label} ${item.description}`.toLowerCase(),
   }));
-  return [...nav, ...EXTRA_COMMANDS].filter((command) => !q || command.keywords.includes(q) || command.label.toLowerCase().includes(q));
+  return [...nav, ...extraCommands(role)].filter((command) => !q || command.keywords.includes(q) || command.label.toLowerCase().includes(q));
+}
+
+function extraCommands(role: string): Command[] {
+  const extras = [...EXTRA_COMMANDS];
+  if (canAccess(role, "knowledge.read")) {
+    extras.push({ id: "search-knowledge", label: "Search knowledge", href: "/knowledge", keywords: "search knowledge documents corpus" });
+  }
+  if (canAccess(role, "knowledge.manage")) {
+    extras.push({ id: "upload-knowledge", label: "Upload document", href: "/knowledge?upload=1", keywords: "upload document knowledge" });
+  }
+  return extras;
 }
 
 export function environmentLabel(value: string | undefined): string {
@@ -149,6 +162,8 @@ export function environmentLabel(value: string | undefined): string {
 export function breadcrumb(role: string, pathname: string): { href?: string; label: string }[] {
   const agent = pathname.match(/^\/agents\/([^/]+)$/);
   if (agent) return [{ href: "/agents", label: "Agents" }, { label: "Agent" }];
+  const knowledgeDoc = pathname.match(/^\/knowledge\/documents\/([^/]+)$/);
+  if (knowledgeDoc) return [{ href: "/knowledge", label: "Knowledge" }, { label: "Document" }];
   const run = pathname.match(/^\/runs\/([^/]+)$/);
   if (!run || run[1] === "new") return [];
   const parent = canAccess(role, "runs.create") ? [{ href: "/runs/new", label: "Support run" }] : [];

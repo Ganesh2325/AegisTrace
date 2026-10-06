@@ -42,9 +42,16 @@ Workspace: `X-Workspace-Id` header. If it is omitted, the caller's sole membersh
 | POST | `/api/v1/agents/{id}/versions` | developer, admin |
 | POST | `/api/v1/agents/{id}/status` | developer, admin |
 | GET | `/api/v1/tools` | developer, admin |
-| GET, POST | `/api/v1/knowledge-bases` | developer, admin |
+| GET | `/api/v1/knowledge-bases` | operator, developer, admin |
+| POST | `/api/v1/knowledge-bases` | developer, admin |
+| GET | `/api/v1/knowledge-bases/{id}/documents` | operator, developer, admin |
 | POST | `/api/v1/knowledge-bases/{id}/documents` | developer, admin |
-| GET | `/api/v1/knowledge-bases/{id}/documents` | developer, admin, and operator read of active titles |
+| GET | `/api/v1/knowledge-bases/{id}/versions` | operator, developer, admin |
+| POST | `/api/v1/knowledge-bases/{id}/versions` | developer, admin |
+| POST | `/api/v1/knowledge-bases/{id}/versions/{versionId}/activate` | developer, admin |
+| POST | `/api/v1/knowledge-bases/{id}/retrieval` | operator, developer, admin |
+| GET | `/api/v1/documents/{id}` | operator, developer, admin |
+| GET | `/api/v1/documents/{id}/chunks` | operator, developer, admin |
 
 ## Admin
 
@@ -72,7 +79,7 @@ Workspace: `X-Workspace-Id` header. If it is omitted, the caller's sole membersh
 
 ## Runtime
 
-`POST /v1/plan` on the agent runtime. Called only by the control plane with the internal token. Body is the snapshot and the question. Response is answer, citations, usage, and an optional proposal. The runtime does not receive a database role that can insert tickets.
+`POST /v1/plan` and `POST /v1/retrieve` on the agent runtime. Called only by the control plane with the internal token. Plan body includes the snapshot, question, workspace, and knowledge version. Retrieve returns ranked chunks without generating an answer.
 
 ## Realtime events
 

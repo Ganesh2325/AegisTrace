@@ -34,7 +34,7 @@ There is no separate policy-assignment table on an agent version. Policy associa
 
 ## Knowledge references
 
-`knowledge_base_id` is required on a version. The API returns `knowledgeName` from `knowledge_bases`. Knowledge document version is **not persisted** on agent versions (`knowledgeVersion: null`, `knowledgeVersionStatus: NOT_PERSISTED`). Document upload, chunking, and retrieval inspection are out of scope here.
+`knowledge_base_id` and `knowledge_base_version_id` are stored on the agent version and copied into the snapshot as `knowledgeBaseId`, `knowledgeBaseVersionId`, and `knowledgeVersion`. The API reports `knowledgeName` and a numeric `knowledgeVersion` with `knowledgeVersionStatus: PINNED`. See `docs/knowledge-rag.md`.
 
 ## Limits
 

@@ -10,7 +10,8 @@ Only routes that exist. Planned destinations are listed at the end and are not l
 | `/runs/{id}` | Run detail | One run, timeline, cancel | `runs.read` | Highlights Support run when that item is visible | `GET` run, timeline, events: all four roles. `POST` cancel: Operator, Admin | EXISTS |
 | `/approvals` | Approval queue | Pending decisions | `approvals.read` | Reviewer, Admin | `GET` and decide: Reviewer, Admin | EXISTS |
 | `/agents` | Agents | Agent list and status | `agents.read` | All four roles | `GET /api/v1/agents`: all four roles. Status change: Developer, Admin | EXISTS |
-| `/knowledge` | Knowledge | Corpus table | `knowledge.read` | Operator, Developer, Admin | `GET` bases and documents: Operator, Developer, Admin. Writes: Developer, Admin | EXISTS |
+| `/knowledge` | Knowledge | Knowledge Center, upload, retrieval inspector | `knowledge.read` | Operator, Developer, Admin | Reads: Operator, Developer, Admin. Writes: Developer, Admin | EXISTS |
+| `/knowledge/documents/{id}` | Document | Extracted text and chunks | `knowledge.read` | Nested under Knowledge | `GET /api/v1/documents/{id}` | EXISTS |
 | `/evaluations` | Evaluation | Heuristic-v1 rows | `evaluation.read` | Developer, Admin | `GET /api/v1/evaluations`: Developer, Admin | EXISTS |
 | `/observability` | Observability | Summary JSON and external trace links | `observability.read` | All four roles | `GET /api/v1/metrics/summary`: all four roles | EXISTS |
 | `/audit` | Audit | Append-only events | `audit.read` | Developer, Admin | `GET /api/v1/audit`: Developer, Admin | EXISTS |

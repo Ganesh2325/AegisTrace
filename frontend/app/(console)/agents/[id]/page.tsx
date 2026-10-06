@@ -38,6 +38,7 @@ import {
   type KnowledgeOption,
   type RegisteredTool,
 } from "../../../../lib/agents";
+import { knowledgeVersionLabel, type KnowledgeVersion } from "../../../../lib/knowledge";
 
 export default function AgentDetailPage() {
   const params = useParams<{ id: string }>();
@@ -58,6 +59,7 @@ export default function AgentDetailPage() {
   const [form, setForm] = useState<CreateVersionInput | null>(null);
   const [tools, setTools] = useState<RegisteredTool[]>([]);
   const [knowledge, setKnowledge] = useState<KnowledgeOption[]>([]);
+  const [knowledgeVersions, setKnowledgeVersions] = useState<KnowledgeVersion[]>([]);
   const [formError, setFormError] = useState("");
   const [dirty, setDirty] = useState(false);
 
@@ -101,6 +103,23 @@ export default function AgentDetailPage() {
       setKnowledge(kbRows);
     }).catch((err) => setFormError(err instanceof Error ? err.message : "Unable to load configuration options"));
   }, [canConfigure, tab]);
+
+  useEffect(() => {
+    if (!form?.knowledgeBaseId) {
+      setKnowledgeVersions([]);
+      return;
+    }
+    api<KnowledgeVersion[]>(`/api/v1/knowledge-bases/${form.knowledgeBaseId}/versions`)
+      .then((rows) => {
+        setKnowledgeVersions(rows);
+        const current = rows.find((row) => row.current);
+        setForm((prev) => {
+          if (!prev || prev.knowledgeBaseVersionId || !current) return prev;
+          return { ...prev, knowledgeBaseVersionId: current.id };
+        });
+      })
+      .catch(() => setKnowledgeVersions([]));
+  }, [form?.knowledgeBaseId]);
 
   useEffect(() => {
     if (!agent || form) return;
@@ -175,6 +194,7 @@ export default function AgentDetailPage() {
           systemPrompt: form.reusePrompt ? undefined : form.systemPrompt,
           promptVersionId: form.reusePrompt ? form.promptVersionId : undefined,
           knowledgeBaseId: form.knowledgeBaseId,
+          knowledgeBaseVersionId: form.knowledgeBaseVersionId,
           toolNames: form.toolNames,
           environment: form.environment,
         }),
@@ -291,9 +311,13 @@ export default function AgentDetailPage() {
                   <TextField label="Token budget" type="number" value={String(form.tokenBudget)} onChange={(event) => patchForm({ tokenBudget: Number(event.target.value) })} />
                   <TextField label="Cost budget (USD)" type="number" step="0.01" value={String(form.costBudgetUsd)} onChange={(event) => patchForm({ costBudgetUsd: Number(event.target.value) })} />
                   <TextField label="Environment" value={form.environment} onChange={(event) => patchForm({ environment: event.target.value })} hint="Uses the workspace environment value already stored on versions." />
-                  <SelectField label="Knowledge base" value={form.knowledgeBaseId} onChange={(event) => patchForm({ knowledgeBaseId: event.target.value })}>
+                  <SelectField label="Knowledge base" value={form.knowledgeBaseId} onChange={(event) => patchForm({ knowledgeBaseId: event.target.value, knowledgeBaseVersionId: "" })}>
                     <option value="">Select a knowledge base</option>
                     {knowledge.map((row) => <option key={row.id} value={row.id}>{row.name}</option>)}
+                  </SelectField>
+                  <SelectField label="Knowledge version" value={form.knowledgeBaseVersionId} onChange={(event) => patchForm({ knowledgeBaseVersionId: event.target.value })}>
+                    <option value="">Select a knowledge version</option>
+                    {knowledgeVersions.map((row) => <option key={row.id} value={row.id}>v{row.version}{row.current ? " (current)" : ""}</option>)}
                   </SelectField>
                 </div>
                 <FieldGroup legend="Tools">
@@ -333,7 +357,7 @@ export default function AgentDetailPage() {
                     <div>Model <span className="text-paper">{form.provider} / {form.model}</span></div>
                     <div>Prompt <span className="text-paper">{form.reusePrompt ? `reuse ${form.promptVersionId.slice(0, 8)}` : "new version"}</span></div>
                     <div>Tools <span className="text-paper">{form.toolNames.join(", ") || "none"}</span></div>
-                    <div>Knowledge <span className="text-paper">{knowledge.find((row) => row.id === form.knowledgeBaseId)?.name || "none"}</span></div>
+                    <div>Knowledge <span className="text-paper">{knowledge.find((row) => row.id === form.knowledgeBaseId)?.name || "none"} {form.knowledgeBaseVersionId ? knowledgeVersionLabel(knowledgeVersions.find((row) => row.id === form.knowledgeBaseVersionId)?.version) : ""}</span></div>
                     <div>Limits <span className="text-paper">{form.maxToolCalls} tool calls · {formatLimitTimeout(form.timeoutMs)}</span></div>
                     <div>Environment <span className="text-paper">{form.environment || "required"}</span></div>
                   </dl>
@@ -407,7 +431,7 @@ function VersionPanel({ version }: { version: AgentVersion }) {
         <div>Prompt <div className="text-paper">v{version.promptVersionNumber}</div></div>
         <div>Tools <div className="text-paper">{toolCountLabel(version.toolCount)}</div></div>
         <div>Knowledge <div className="text-paper">{knowledgeLabel(version.knowledgeName)}</div></div>
-        <div>Knowledge version <div className="text-paper">{version.knowledgeVersion || version.knowledgeVersionStatus}</div></div>
+        <div>Knowledge version <div className="text-paper">{knowledgeVersionLabel(version.knowledgeVersion, version.knowledgeVersionStatus)}</div></div>
         <div>Timeout <div className="text-paper">{formatLimitTimeout(version.timeoutMs)}</div></div>
         <div>Tool calls <div className="text-paper">{version.maxToolCalls}</div></div>
         <div>Token budget <div className="text-paper">{version.tokenBudget ?? "Not persisted in columns"}</div></div>

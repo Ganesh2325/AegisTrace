@@ -32,9 +32,10 @@ const version: AgentVersion = {
   promptVersionId: "p1",
   promptVersionNumber: 1,
   knowledgeBaseId: "k1",
+  knowledgeBaseVersionId: "kv1",
   knowledgeName: "Support policies",
-  knowledgeVersion: null,
-  knowledgeVersionStatus: "NOT_PERSISTED",
+  knowledgeVersion: 1,
+  knowledgeVersionStatus: "PINNED",
   createdAt: "2026-10-06T00:00:00Z",
   createdByEmail: "dev.developer@aegistrace.local",
   usedByRunCount: 7,
@@ -75,7 +76,7 @@ assert.ok(visibleTabs(true).some((tab) => tab.id === "audit"));
 const input: CreateVersionInput = formFromVersion(version, "dev");
 assert.equal(input.reusePrompt, true);
 assert.equal(input.systemPrompt, "");
-assert.deepEqual(input.toolNames, ["search_knowledge", "create_support_ticket"]);
+assert.equal(input.knowledgeBaseVersionId, "kv1");
 assert.equal(validateCreateVersion(input).length, 0);
 assert.ok(validateCreateVersion({ ...input, reusePrompt: false, systemPrompt: "" }).includes("A system prompt is required for a new prompt version."));
 assert.ok(validateCreateVersion({ ...input, toolNames: [] }).includes("At least one tool is required."));
