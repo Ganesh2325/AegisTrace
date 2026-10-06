@@ -30,6 +30,7 @@ public final class MetricsCalculator {
             }
             String normalized = raw.trim().toUpperCase();
             return switch (normalized) {
+                case "1H", "1HR" -> rollingHours(1, close);
                 case "24H", "1D" -> rollingHours(24, close);
                 case "7D", "168H" -> rollingHours(168, close);
                 case "30D", "720H" -> rollingHours(720, close);

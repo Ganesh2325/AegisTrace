@@ -23,7 +23,9 @@ assert.equal(canAccess("REVIEWER", "knowledge.read"), false);
 assert.equal(commandsFor("DEVELOPER", "upload")[0]?.href, "/knowledge?upload=1");
 assert.deepEqual(breadcrumb("REVIEWER", "/approvals/abc").map((c) => c.label), ["Approvals", "Review"]);
 assert.deepEqual(breadcrumb("DEVELOPER", "/knowledge/documents/abc").map((c) => c.label), ["Knowledge", "Document"]);
-assert.deepEqual(breadcrumb("OPERATOR", "/agents/abc").map((c) => c.label), ["Agents", "Agent"]);
+assert.deepEqual(breadcrumb("DEVELOPER", "/observability/traces/abc").map((c) => c.label), ["Observability", "Traces", "Trace"]);
+assert.deepEqual(breadcrumb("ADMIN", "/audit/abc").map((c) => c.label), ["Audit", "Event"]);
+assert.ok(commandsFor("OPERATOR", "traces").some((item) => item.href === "/observability/traces"));
 assert.equal(canAccess("GUEST", "overview.read"), false);
 
 assert.equal(decideRoute("OPERATOR", "/audit").kind, "forbidden");

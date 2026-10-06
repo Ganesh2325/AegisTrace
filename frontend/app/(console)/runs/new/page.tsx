@@ -415,7 +415,12 @@ function ExecutionSummary({
           <dd><Mono>{compactRunId(run.id)}</Mono></dd>
           <Button variant="ghost" className="h-7 px-2 text-xs" onClick={onCopy}>Copy run ID</Button>
         </div>
-        {run.traceId && <Meta label="Trace" value={run.traceId} mono />}
+        {run.traceId && (
+          <div className="flex flex-wrap items-center gap-2">
+            <Meta label="Trace" value={run.traceId} mono />
+            <ButtonLink href={`/observability/traces/${encodeURIComponent(run.traceId)}`} variant="ghost">Open trace</ButtonLink>
+          </div>
+        )}
         {run.agentName && <Meta label="Agent" value={run.agentName} />}
         {run.agentVersionNumber != null && <Meta label="Version used" value={`v${run.agentVersionNumber}`} />}
         {run.agentVersionId && <Meta label="Version ID" value={run.agentVersionId} mono />}

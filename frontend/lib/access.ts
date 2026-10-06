@@ -148,6 +148,13 @@ function extraCommands(role: string): Command[] {
   if (canAccess(role, "knowledge.manage")) {
     extras.push({ id: "upload-knowledge", label: "Upload document", href: "/knowledge?upload=1", keywords: "upload document knowledge" });
   }
+  if (canAccess(role, "observability.read")) {
+    extras.push({ id: "open-observability", label: "Open Observability", href: "/observability", keywords: "observability traces metrics latency" });
+    extras.push({ id: "open-traces", label: "Open Traces", href: "/observability/traces", keywords: "search traces jaeger" });
+  }
+  if (canAccess(role, "audit.read")) {
+    extras.push({ id: "open-audit", label: "Open Audit", href: "/audit", keywords: "search audit governance events" });
+  }
   return extras;
 }
 
@@ -168,6 +175,12 @@ export function breadcrumb(role: string, pathname: string): { href?: string; lab
   if (knowledgeDoc) return [{ href: "/knowledge", label: "Knowledge" }, { label: "Document" }];
   const approval = pathname.match(/^\/approvals\/([^/]+)$/);
   if (approval) return [{ href: "/approvals", label: "Approvals" }, { label: "Review" }];
+  if (pathname === "/observability/traces") return [{ href: "/observability", label: "Observability" }, { label: "Traces" }];
+  if (pathname === "/observability/errors") return [{ href: "/observability", label: "Observability" }, { label: "Errors" }];
+  const trace = pathname.match(/^\/observability\/traces\/([^/]+)$/);
+  if (trace) return [{ href: "/observability", label: "Observability" }, { href: "/observability/traces", label: "Traces" }, { label: "Trace" }];
+  const auditEvent = pathname.match(/^\/audit\/([^/]+)$/);
+  if (auditEvent) return [{ href: "/audit", label: "Audit" }, { label: "Event" }];
   const run = pathname.match(/^\/runs\/([^/]+)$/);
   if (!run || run[1] === "new") return [];
   const parent = canAccess(role, "runs.create") ? [{ href: "/runs/new", label: "Support run" }] : [];

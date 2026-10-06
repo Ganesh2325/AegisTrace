@@ -239,6 +239,15 @@ class MetricsCalculatorTest {
     }
 
     @Test
+    void rollingOneHourIsOneHour() {
+        Instant end = Instant.parse("2026-10-05T12:00:00Z");
+        var window = MetricsCalculator.Window.parse("1H", end);
+        assertEquals("1H", window.code());
+        assertEquals(1, window.hours());
+        assertEquals(end.minusSeconds(3600L), window.start());
+    }
+
+    @Test
     void rollingSevenDaysIsOneHundredSixtyEightHours() {
         Instant end = Instant.parse("2026-10-05T12:00:00Z");
         var window = MetricsCalculator.Window.parse("7D", end);

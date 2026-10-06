@@ -152,6 +152,10 @@ def fail(job, error_type: str, message: str, retryable: bool) -> None:
 def process(job) -> None:
     payload = job["payload"] if isinstance(job["payload"], dict) else json.loads(job["payload"])
     job["payload"] = payload
+    print(
+        f"job_claimed type={job['job_type']} run_id={payload.get('runId')} "
+        f"trace_id={payload.get('traceId')} proposal_id={payload.get('proposalId')}"
+    )
     if job["job_type"] == "EMBED_DOCUMENT":
         embed_document(payload["documentId"])
     elif job["job_type"] == "EXECUTE_TOOL":

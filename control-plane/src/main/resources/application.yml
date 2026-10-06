@@ -53,6 +53,9 @@ aegis:
   failure-simulation-enabled: ${AEGIS_FAILURE_SIMULATION:true}
   frontend-origin: ${FRONTEND_ORIGIN:http://localhost:3000}
   cookie-secure: ${AEGIS_COOKIE_SECURE:false}
+  jaeger-query-url: ${JAEGER_QUERY_URL:}
+  jaeger-public-url: ${JAEGER_PUBLIC_URL:http://localhost:16686}
+  prometheus-url: ${PROMETHEUS_URL:}
   redis:
     enabled: ${REDIS_ENABLED:false}
     host: ${REDIS_HOST:localhost}

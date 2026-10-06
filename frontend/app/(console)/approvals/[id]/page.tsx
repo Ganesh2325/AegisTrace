@@ -152,7 +152,8 @@ export default function ApprovalDetailPage() {
               )}
               <div><dt className="text-[11px] uppercase tracking-[0.12em] text-muted">Run</dt><dd><ButtonLink href={`/runs/${row.runId}`} variant="ghost"><Mono>{row.runId}</Mono></ButtonLink></dd></div>
               <div><dt className="text-[11px] uppercase tracking-[0.12em] text-muted">Run state</dt><dd><StatusBadge status={row.runState} /></dd></div>
-              <div><dt className="text-[11px] uppercase tracking-[0.12em] text-muted">Trace</dt><dd><Mono>{row.traceId}</Mono></dd></div>
+              <div><dt className="text-[11px] uppercase tracking-[0.12em] text-muted">Trace</dt><dd className="flex flex-wrap items-center gap-2"><Mono>{row.traceId}</Mono>{canAccess(role, "observability.read") && <ButtonLink href={`/observability/traces/${encodeURIComponent(row.traceId)}`} variant="ghost">Open trace</ButtonLink>}</dd></div>
+              {canAccess(role, "audit.read") && <div><dt className="text-[11px] uppercase tracking-[0.12em] text-muted">Audit</dt><dd><ButtonLink href={`/audit?approvalId=${row.id}`} variant="ghost">Open audit</ButtonLink></dd></div>}
               <div><dt className="text-[11px] uppercase tracking-[0.12em] text-muted">Requested</dt><dd><Timestamp value={row.requestedAt} /></dd></div>
               <div><dt className="text-[11px] uppercase tracking-[0.12em] text-muted">Expires</dt><dd><Timestamp value={row.expiresAt} /></dd></div>
               {row.reviewerEmail && <div><dt className="text-[11px] uppercase tracking-[0.12em] text-muted">Reviewer</dt><dd>{row.reviewerEmail}</dd></div>}

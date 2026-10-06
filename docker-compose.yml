@@ -113,6 +113,9 @@ services:
       S3_SECRET_KEY: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
       S3_BUCKET: aegistrace-documents
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318/v1/traces
+      JAEGER_QUERY_URL: http://jaeger:16686
+      JAEGER_PUBLIC_URL: http://localhost:16686
+      PROMETHEUS_URL: http://prometheus:9090
     ports:
       - "8080:8080"
     depends_on:

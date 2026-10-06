@@ -15,6 +15,9 @@ public class AppProperties {
     private boolean cookieSecure;
     private Redis redis = new Redis();
     private S3 s3 = new S3();
+    private String jaegerQueryUrl = "";
+    private String jaegerPublicUrl = "http://localhost:16686";
+    private String prometheusUrl = "";
 
     public String getJwtSecret() { return jwtSecret; }
     public void setJwtSecret(String jwtSecret) { this.jwtSecret = jwtSecret; }
@@ -38,6 +41,12 @@ public class AppProperties {
     public void setRedis(Redis redis) { this.redis = redis; }
     public S3 getS3() { return s3; }
     public void setS3(S3 s3) { this.s3 = s3; }
+    public String getJaegerQueryUrl() { return jaegerQueryUrl; }
+    public void setJaegerQueryUrl(String jaegerQueryUrl) { this.jaegerQueryUrl = jaegerQueryUrl; }
+    public String getJaegerPublicUrl() { return jaegerPublicUrl; }
+    public void setJaegerPublicUrl(String jaegerPublicUrl) { this.jaegerPublicUrl = jaegerPublicUrl; }
+    public String getPrometheusUrl() { return prometheusUrl; }
+    public void setPrometheusUrl(String prometheusUrl) { this.prometheusUrl = prometheusUrl; }
 
     public boolean isProduction() {
         return "prod".equalsIgnoreCase(environment) || "production".equalsIgnoreCase(environment);

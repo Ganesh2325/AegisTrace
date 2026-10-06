@@ -89,10 +89,9 @@ public class RunService {
             throw new ApiException("FORBIDDEN", "You are not a member of that workspace.", 403);
         }
         UUID runId = UUID.randomUUID();
-        var span = tracer.nextSpan().name("agent.run");
+        var span = tracer.nextSpan().name("aegistrace.agent.run");
         span.tag("run.id", runId.toString());
         span.tag("workspace.id", workspaceId.toString());
-        span.tag("user.id", actor.id().toString());
         span.start();
         String traceId = span.context().traceId();
         if (traceId == null || traceId.isBlank() || traceId.chars().allMatch(ch -> ch == '0')) {
@@ -184,9 +183,10 @@ public class RunService {
             fail(runId, "BUDGET_EXCEEDED", "BUDGET_EXCEEDED", "Estimated tokens exceed the run budget.");
             return;
         }
-        var span = tracer.nextSpan().name("configuration.load").start();
+        var span = tracer.nextSpan().name("aegistrace.configuration.load").start();
         try (Tracer.SpanInScope ignored = tracer.withSpan(span)) {
-            span.tag("agent.version", String.valueOf(snapshot.get("version")));
+            span.tag("agent.version_id", String.valueOf(snapshot.get("agentVersionId") == null ? snapshot.get("version") : snapshot.get("agentVersionId")));
+            span.tag("run.id", runId.toString());
         } finally {
             span.end();
         }
@@ -406,6 +406,7 @@ public class RunService {
                 payload.put("approvalId", approvalId);
                 payload.put("workspaceId", workspaceId);
                 payload.put("tool", row.toolName());
+                payload.put("traceId", jdbc.queryForObject("select trace_id from agent_runs where id = :id", Map.of("id", runId), String.class));
                 payload.put("arguments", Jsons.map(mapper, row.arguments()));
                 jdbc.update("""
                         insert into jobs (id, workspace_id, job_type, payload, status, max_attempts, idempotency_key)
@@ -624,17 +625,17 @@ public class RunService {
         body.put("maxTokens", snapshot.get("maxTokens"));
         body.put("allowedTools", snapshot.get("tools"));
         body.put("simulate", snapshot.get("simulate"));
-        int attempts = 0;
+            int attempts = 0;
         while (true) {
             attempts++;
-            var child = tracer.nextSpan().name("llm.generate").start();
+            var child = tracer.nextSpan().name("aegistrace.runtime.plan").start();
             try (Tracer.SpanInScope ignored = tracer.withSpan(child)) {
-                var retrieval = tracer.nextSpan().name("retrieval.search").start();
-                try (Tracer.SpanInScope retrievalScope = tracer.withSpan(retrieval)) {
-                    return runtime.plan(body, ((Number) snapshot.get("timeoutMs")).intValue());
-                } finally {
-                    retrieval.end();
+                child.tag("run.id", run.id().toString());
+                child.tag("workspace.id", run.workspaceId().toString());
+                if (snapshot.get("knowledgeBaseVersionId") != null) {
+                    child.tag("knowledge.version_id", String.valueOf(snapshot.get("knowledgeBaseVersionId")));
                 }
+                return runtime.plan(body, ((Number) snapshot.get("timeoutMs")).intValue());
             } catch (RuntimeClient.RuntimeCallException ex) {
                 jdbc.update("update agent_runs set orchestration_attempts = orchestration_attempts + 1 where id = :id",
                         Map.of("id", run.id()));
@@ -661,7 +662,11 @@ public class RunService {
 
     private PolicyDecision evaluateTool(RunRow run, Map<String, Object> snapshot, String toolName,
                                        Map<String, Object> arguments, int priorCalls, boolean budgetExceeded) {
-        var tools = jdbc.query("""
+        var span = tracer.nextSpan().name("aegistrace.policy.evaluate").start();
+        try (Tracer.SpanInScope ignored = tracer.withSpan(span)) {
+            span.tag("run.id", run.id().toString());
+            span.tag("tool.name", toolName);
+            var tools = jdbc.query("""
                 select t.name, t.classification, t.approval_required, t.required_permission
                 from tools t where t.name = :name
                 """, Map.of("name", toolName), (rs, n) -> new ToolDef(
@@ -676,7 +681,7 @@ public class RunService {
                 Map.of("user", run.userId(), "workspace", run.workspaceId()), String.class);
         String priority = arguments.get("priority") instanceof String value ? value : null;
         int maxCalls = ((Number) snapshot.getOrDefault("maxToolCalls", 3)).intValue();
-        return policy.evaluate(new PolicyEngine.PolicyRequest(
+        PolicyDecision decision = policy.evaluate(new PolicyEngine.PolicyRequest(
                 toolName,
                 arguments,
                 registered,
@@ -691,6 +696,12 @@ public class RunService {
                 registered && tools.get(0).approvalRequired(),
                 priority
         ));
+            span.tag("policy.decision", decision.kind().name());
+            span.tag("policy.code", decision.code() == null ? "" : decision.code());
+            return decision;
+        } finally {
+            span.end();
+        }
     }
 
     private boolean transition(UUID runId, String to) {
@@ -771,9 +782,10 @@ public class RunService {
     }
 
     private void enqueueEvaluation(UUID runId) {
-        var span = tracer.nextSpan().name("evaluation.enqueue").start();
+        var span = tracer.nextSpan().name("aegistrace.evaluation.enqueue").start();
         try {
             UUID workspaceId = jdbc.queryForObject("select workspace_id from agent_runs where id = :id", Map.of("id", runId), UUID.class);
+            String traceId = jdbc.queryForObject("select trace_id from agent_runs where id = :id", Map.of("id", runId), String.class);
             jdbc.update("""
                     insert into jobs (id, workspace_id, job_type, payload, status, max_attempts, idempotency_key)
                     values (:id, :workspace, 'EVALUATE_RUN', :payload, 'PENDING', 3, :key)
@@ -781,7 +793,7 @@ public class RunService {
                     """, new MapSqlParameterSource()
                     .addValue("id", UUID.randomUUID())
                     .addValue("workspace", workspaceId)
-                    .addValue("payload", Jsons.jsonb(Jsons.write(mapper, Map.of("runId", runId))))
+                    .addValue("payload", Jsons.jsonb(Jsons.write(mapper, Map.of("runId", runId, "traceId", traceId == null ? "" : traceId))))
                     .addValue("key", "eval:" + runId));
             span.tag("run.id", runId.toString());
         } finally {

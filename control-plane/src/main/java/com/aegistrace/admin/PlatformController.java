@@ -54,30 +54,6 @@ class PlatformController {
         this.operations = operations;
     }
 
-    @GetMapping("/audit")
-    Map<String, Object> audit(HttpServletRequest request, @RequestParam(defaultValue = "0") int page) {
-        var membership = rbac.require(request, "ADMIN", "DEVELOPER");
-        int size = 50;
-        var items = jdbc.query("""
-                select id, actor_id, action, resource_type, resource_id, trace_id, run_id, metadata::text as metadata, created_at
-                from audit_events where workspace_id = :workspace
-                order by created_at desc limit :limit offset :offset
-                """, Map.of("workspace", membership.workspaceId(), "limit", size, "offset", Math.max(page, 0) * size), (rs, n) -> {
-            var row = new LinkedHashMap<String, Object>();
-            row.put("id", UUID.fromString(rs.getString("id")));
-            row.put("actorId", rs.getString("actor_id") == null ? null : UUID.fromString(rs.getString("actor_id")));
-            row.put("action", rs.getString("action"));
-            row.put("resourceType", rs.getString("resource_type"));
-            row.put("resourceId", rs.getString("resource_id"));
-            row.put("traceId", rs.getString("trace_id"));
-            row.put("runId", rs.getString("run_id") == null ? null : UUID.fromString(rs.getString("run_id")));
-            row.put("metadata", Jsons.map(mapper, rs.getString("metadata")));
-            row.put("createdAt", rs.getTimestamp("created_at").toInstant().toString());
-            return row;
-        });
-        return Map.of("items", items, "page", Math.max(page, 0), "size", size);
-    }
-
     @GetMapping("/metrics/summary")
     Map<String, Object> metrics(HttpServletRequest request) {
         var membership = rbac.require(request, MetricsService.READ_ROLES);

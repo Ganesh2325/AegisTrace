@@ -2,8 +2,10 @@
 
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { api, apiBase } from "../../../../lib/api";
-import { Button } from "../../../../components/ui/Button";
+import { api, apiBase, roleOf } from "../../../../lib/api";
+import { canAccess } from "../../../../lib/access";
+import { readSession } from "../../../../lib/session";
+import { Button, ButtonLink } from "../../../../components/ui/Button";
 import { Card } from "../../../../components/ui/Card";
 import { Page, SectionHeader } from "../../../../components/ui/PageHeader";
 import { StatusBadge } from "../../../../components/ui/StatusBadge";
@@ -21,6 +23,9 @@ type EventRow = { sequence: number; eventType: string; state: string; payload: R
 
 export default function RunDetail() {
   const params = useParams<{ id: string }>();
+  const role = roleOf(readSession().current);
+  const canTrace = canAccess(role, "observability.read");
+  const canAudit = canAccess(role, "audit.read");
   const [run, setRun] = useState<Run | null>(null);
   const [events, setEvents] = useState<EventRow[]>([]);
   const [error, setError] = useState("");
@@ -58,6 +63,8 @@ export default function RunDetail() {
         </div>
         <h1 className="mt-2 text-xl font-semibold tracking-tight">{run.question}</h1>
         <p className="mt-2"><Mono>trace {run.traceId}</Mono></p>
+        {canTrace && run.traceId && <p className="mt-2"><ButtonLink href={`/observability/traces/${encodeURIComponent(run.traceId)}`} variant="ghost">Open trace</ButtonLink></p>}
+        {canAudit && <p className="mt-1"><ButtonLink href={`/audit?runId=${run.id}`} variant="ghost">Open audit activity</ButtonLink></p>}
         {run.failureCategory && <p className="mt-3 text-sm text-danger">{run.failureCategory}: {run.errorMessage}</p>}
         <Card className="mt-4 whitespace-pre-wrap text-sm leading-6">{answer || "Working…"}</Card>
         <div className="mt-4">
