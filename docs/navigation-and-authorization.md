@@ -16,7 +16,8 @@ These names mirror existing `Rbac.require` role lists. They are not a second pol
 | `runs.read` | `GET /api/v1/runs` and `/runs/{id}` | Operator, Reviewer, Developer, Admin |
 | `runs.create` | `POST /api/v1/runs` | Operator, Admin |
 | `approvals.read` | `GET /api/v1/approvals` | Reviewer, Admin |
-| `agents.read` | `GET /api/v1/agents` | Operator, Reviewer, Developer, Admin |
+| `agents.read` | `GET /api/v1/agents` and agent detail/version reads | Operator, Reviewer, Developer, Admin |
+| `agents.configure` | Create agent, create version, activate version, change agent status, list tools | Developer, Admin |
 | `knowledge.read` | `GET /api/v1/knowledge-bases` | Operator, Developer, Admin |
 | `evaluation.read` | `GET /api/v1/evaluations` | Developer, Admin |
 | `observability.read` | `GET /api/v1/metrics/summary` | Operator, Reviewer, Developer, Admin |
@@ -25,7 +26,7 @@ These names mirror existing `Rbac.require` role lists. They are not a second pol
 
 `runs.cancel` stays Operator and Admin on the API. The shell does not add a separate nav item for it.
 
-Agent status changes and knowledge writes stay Developer and Admin. The Agents page is visible to every role because the list API allows every role. A role that cannot change status still gets 403 from the status API.
+Agent status changes, version creation, and version activation stay Developer and Admin. The Agents page is visible to every role because the list API allows every role. Configure actions are hidden unless `agents.configure` is present; the API still returns 403.
 
 ## Navigation
 

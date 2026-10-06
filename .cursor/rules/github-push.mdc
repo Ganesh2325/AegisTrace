@@ -1,0 +1,21 @@
+---
+description: After each gated product increment, commit and push to the GitHub remote.
+alwaysApply: true
+---
+
+# GitHub push after every increment
+
+Remote is always `https://github.com/Ganesh2325/AegisTrace` (`origin` on `main`).
+
+When a gated product increment (the user-supplied PHASE prompt) is marked complete and reported:
+
+1. Commit the working tree.
+2. Push to that remote immediately. Do not wait to be asked again.
+3. Return the commit SHA and the GitHub URL.
+
+Commit messages, README, and files that go to GitHub must not contain `Phase N` / `PHASE N` labels. Keep `docs/phase-roadmap.md` local/untracked unless the user explicitly wants it published.
+
+Examples:
+
+- `feat: add versioned agent control plane`
+- Do not write `feat: complete Phase 6`

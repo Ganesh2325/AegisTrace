@@ -6,6 +6,7 @@ export type Capability =
   | "runs.create"
   | "approvals.read"
   | "agents.read"
+  | "agents.configure"
   | "knowledge.read"
   | "evaluation.read"
   | "observability.read"
@@ -49,6 +50,7 @@ const ALL: Capability[] = [
   "runs.create",
   "approvals.read",
   "agents.read",
+  "agents.configure",
   "knowledge.read",
   "evaluation.read",
   "observability.read",
@@ -59,7 +61,7 @@ const ALL: Capability[] = [
 const ROLE_CAPABILITIES: Record<Role, Capability[]> = {
   OPERATOR: ["overview.read", "runs.read", "runs.create", "agents.read", "knowledge.read", "observability.read"],
   REVIEWER: ["overview.read", "runs.read", "approvals.read", "agents.read", "observability.read"],
-  DEVELOPER: ["overview.read", "runs.read", "agents.read", "knowledge.read", "evaluation.read", "observability.read", "audit.read", "admin.console"],
+  DEVELOPER: ["overview.read", "runs.read", "agents.read", "agents.configure", "knowledge.read", "evaluation.read", "observability.read", "audit.read", "admin.console"],
   ADMIN: ALL,
 };
 
@@ -67,7 +69,7 @@ export const NAV_ITEMS: NavItem[] = [
   { label: "Overview", href: "/", icon: "overview", capability: "overview.read", description: "Workspace operations", group: "workspace", match: (path) => path === "/" },
   { label: "Support run", href: "/runs/new", icon: "run", capability: "runs.create", description: "Start a support run", group: "workspace", match: (path) => path === "/runs/new" || path.startsWith("/runs/") },
   { label: "Approvals", href: "/approvals", icon: "approval", capability: "approvals.read", description: "Pending write approvals", group: "workspace", match: (path) => path === "/approvals" || path.startsWith("/approvals/") },
-  { label: "Agents", href: "/agents", icon: "agent", capability: "agents.read", description: "Agent records", group: "build", match: (path) => path === "/agents" || path.startsWith("/agents/") },
+  { label: "Agents", href: "/agents", icon: "agent", capability: "agents.read", description: "Agent versions and configuration", group: "build", match: (path) => path === "/agents" || path.startsWith("/agents/") },
   { label: "Knowledge", href: "/knowledge", icon: "knowledge", capability: "knowledge.read", description: "Document corpus", group: "build", match: (path) => path === "/knowledge" || path.startsWith("/knowledge/") },
   { label: "Evaluation", href: "/evaluations", icon: "evaluation", capability: "evaluation.read", description: "Heuristic evaluation checks", group: "intelligence", match: (path) => path === "/evaluations" || path.startsWith("/evaluations/") },
   { label: "Observability", href: "/observability", icon: "observability", capability: "observability.read", description: "Metrics and trace tools", group: "intelligence", match: (path) => path === "/observability" || path.startsWith("/observability/") },
@@ -145,6 +147,8 @@ export function environmentLabel(value: string | undefined): string {
 }
 
 export function breadcrumb(role: string, pathname: string): { href?: string; label: string }[] {
+  const agent = pathname.match(/^\/agents\/([^/]+)$/);
+  if (agent) return [{ href: "/agents", label: "Agents" }, { label: "Agent" }];
   const run = pathname.match(/^\/runs\/([^/]+)$/);
   if (!run || run[1] === "new") return [];
   const parent = canAccess(role, "runs.create") ? [{ href: "/runs/new", label: "Support run" }] : [];

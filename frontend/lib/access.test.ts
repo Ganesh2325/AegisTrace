@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { activeItem, canAccess, commandsFor, decideRoute, environmentLabel, visibleNav } from "./access.ts";
+import { activeItem, breadcrumb, canAccess, commandsFor, decideRoute, environmentLabel, visibleNav } from "./access.ts";
 
 const labels = (role: string) => visibleNav(role).map((item) => item.label);
 
@@ -11,6 +11,11 @@ assert.equal(canAccess("OPERATOR", "audit.read"), false);
 assert.equal(canAccess("OPERATOR", "admin.console"), false);
 assert.equal(canAccess("REVIEWER", "approvals.read"), true);
 assert.equal(canAccess("DEVELOPER", "runs.create"), false);
+assert.equal(canAccess("OPERATOR", "agents.configure"), false);
+assert.equal(canAccess("REVIEWER", "agents.configure"), false);
+assert.equal(canAccess("DEVELOPER", "agents.configure"), true);
+assert.equal(canAccess("ADMIN", "agents.configure"), true);
+assert.deepEqual(breadcrumb("OPERATOR", "/agents/abc").map((c) => c.label), ["Agents", "Agent"]);
 assert.equal(canAccess("GUEST", "overview.read"), false);
 
 assert.equal(decideRoute("OPERATOR", "/audit").kind, "forbidden");
