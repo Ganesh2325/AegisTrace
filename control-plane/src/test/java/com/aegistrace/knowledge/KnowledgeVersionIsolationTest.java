@@ -1,10 +1,10 @@
 package com.aegistrace.knowledge;
 
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.TestInstance;
+import org.testcontainers.DockerClientFactory;
 import org.testcontainers.containers.PostgreSQLContainer;
-import org.testcontainers.junit.jupiter.Container;
-import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
 import java.sql.Connection;
@@ -16,14 +16,15 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-@Testcontainers(disabledWithoutDocker = true)
-@TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class KnowledgeVersionIsolationTest {
-    @Container
-    static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>(DockerImageName.parse("postgres:16-alpine"))
-            .withDatabaseName("aegis")
-            .withUsername("aegis")
-            .withPassword("aegis");
+    private static PostgreSQLContainer<?> postgres;
+
+    @AfterAll
+    static void stopPostgres() {
+        if (postgres != null) {
+            postgres.stop();
+        }
+    }
 
     @Test
     void publishedVersionMembershipDoesNotGainLaterDocuments() throws Exception {
@@ -77,7 +78,7 @@ class KnowledgeVersionIsolationTest {
             UUID run = UUID.randomUUID();
             exec(connection, "insert into knowledge_bases (id) values (?)", kb);
             exec(connection, "insert into knowledge_base_versions (id, knowledge_base_id, version_number, current_version) values (?,?,1,true)", v1, kb);
-            exec(connection, "insert into agent_runs (id, knowledge_base_id, knowledge_base_version_id, snapshot) values (?,?,?,'{\"knowledgeBaseVersionId\":\"' || ? || '\"}'::jsonb)",
+            exec(connection, "insert into agent_runs (id, knowledge_base_id, knowledge_base_version_id, snapshot) values (?,?,?,jsonb_build_object('knowledgeBaseVersionId', ?::text))",
                     run, kb, v1, v1.toString());
             exec(connection, "insert into knowledge_base_versions (id, knowledge_base_id, version_number, current_version) values (?,?,2,false)", v2, kb);
             exec(connection, "update knowledge_base_versions set current_version = false where knowledge_base_id = ?", kb);
@@ -94,8 +95,32 @@ class KnowledgeVersionIsolationTest {
     }
 
     private Connection connect() throws SQLException {
-        POSTGRES.start();
-        return DriverManager.getConnection(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
+        String url = System.getenv("AEGIS_TEST_JDBC_URL");
+        if (url != null && !url.isBlank()) {
+            return DriverManager.getConnection(url, env("AEGIS_TEST_DB_USER", "aegis"), env("AEGIS_TEST_DB_PASSWORD", "aegis"));
+        }
+        Assumptions.assumeTrue(dockerAvailable(), "Docker is not available");
+        if (postgres == null) {
+            postgres = new PostgreSQLContainer<>(DockerImageName.parse("postgres:16-alpine"))
+                    .withDatabaseName("aegis")
+                    .withUsername("aegis")
+                    .withPassword("aegis");
+            postgres.start();
+        }
+        return DriverManager.getConnection(postgres.getJdbcUrl(), postgres.getUsername(), postgres.getPassword());
+    }
+
+    private static boolean dockerAvailable() {
+        try {
+            return DockerClientFactory.instance().isDockerAvailable();
+        } catch (RuntimeException ex) {
+            return false;
+        }
+    }
+
+    private static String env(String name, String fallback) {
+        String value = System.getenv(name);
+        return value == null || value.isBlank() ? fallback : value;
     }
 
     private void schema(Connection connection) throws SQLException {
