@@ -33,7 +33,7 @@ export function Dialog({
     if (!open) return;
     const node = ref.current;
     const previous = document.activeElement as HTMLElement | null;
-    node?.querySelector<HTMLElement>("button, [href], input")?.focus();
+    node?.querySelector<HTMLElement>("textarea, input, button, [href]")?.focus();
     function onKey(event: KeyboardEvent) {
       if (event.key === "Escape") onClose();
       if (event.key !== "Tab" || !node) return;

@@ -1,5 +1,6 @@
 package com.aegistrace.jobs;
 
+import com.aegistrace.audit.AuditService;
 import com.aegistrace.run.RunEventBus;
 import com.aegistrace.run.RunStateMachine;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -18,12 +19,15 @@ public class JobMaintenance {
     private final TransactionTemplate tx;
     private final RunEventBus events;
     private final MeterRegistry meters;
+    private final AuditService audit;
 
-    public JobMaintenance(NamedParameterJdbcTemplate jdbc, TransactionTemplate tx, RunEventBus events, MeterRegistry meters) {
+    public JobMaintenance(NamedParameterJdbcTemplate jdbc, TransactionTemplate tx, RunEventBus events, MeterRegistry meters,
+                          AuditService audit) {
         this.jdbc = jdbc;
         this.tx = tx;
         this.events = events;
         this.meters = meters;
+        this.audit = audit;
         meters.gauge("aegis.queue.depth", this, JobMaintenance::queueDepth);
     }
 
@@ -67,9 +71,13 @@ public class JobMaintenance {
 
     private void expireApprovals() {
         var ids = jdbc.query("""
-                select a.id, a.run_id from approvals a
+                select a.id, a.run_id, a.workspace_id from approvals a
                 where a.status = 'PENDING' and a.expires_at < now()
-                """, Map.of(), (rs, n) -> new UUID[]{UUID.fromString(rs.getString("id")), UUID.fromString(rs.getString("run_id"))});
+                """, Map.of(), (rs, n) -> new UUID[]{
+                UUID.fromString(rs.getString("id")),
+                UUID.fromString(rs.getString("run_id")),
+                UUID.fromString(rs.getString("workspace_id"))
+        });
         for (UUID[] row : ids) {
             tx.executeWithoutResult(status -> {
                 int updated = jdbc.update("""
@@ -79,6 +87,8 @@ public class JobMaintenance {
                 if (updated == 0) {
                     return;
                 }
+                events.append(row[1], "APPROVAL_EXPIRED", "APPROVAL_REQUIRED", Map.of("approvalId", row[0]));
+                audit.record(row[2], null, "APPROVAL_EXPIRED", "approval", row[0].toString(), row[1], Map.of());
                 String state = jdbc.queryForObject("select state from agent_runs where id = :id for update", Map.of("id", row[1]), String.class);
                 if (RunStateMachine.canTransition(state, "FAILED")) {
                     jdbc.update("""
@@ -110,8 +120,16 @@ public class JobMaintenance {
                         where id = :id and state = :state
                         """, new MapSqlParameterSource().addValue("id", id).addValue("state", row[1]));
                 if (updated == 1) {
+                    var pending = jdbc.query(
+                            "select id, workspace_id from approvals where run_id = :id and status = 'PENDING'",
+                            Map.of("id", id), (rs, n) -> new UUID[]{
+                                    UUID.fromString(rs.getString("id")), UUID.fromString(rs.getString("workspace_id"))});
                     jdbc.update("update approvals set status = 'EXPIRED', decided_at = now() where run_id = :id and status = 'PENDING'",
                             Map.of("id", id));
+                    for (UUID[] approval : pending) {
+                        events.append(id, "APPROVAL_EXPIRED", "TIMED_OUT", Map.of("approvalId", approval[0]));
+                        audit.record(approval[1], null, "APPROVAL_EXPIRED", "approval", approval[0].toString(), id, Map.of("runTimeout", true));
+                    }
                     events.append(id, "RUN_TIMED_OUT", "TIMED_OUT", Map.of("category", "TIMED_OUT"));
                     meters.counter("aegis.runs", "result", "timed_out").increment();
                 }

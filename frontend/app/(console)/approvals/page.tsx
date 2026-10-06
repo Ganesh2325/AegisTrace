@@ -1,82 +1,160 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { api } from "../../../lib/api";
-import { Button } from "../../../components/ui/Button";
+import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { api, ApiError, roleOf } from "../../../lib/api";
+import { canAccess } from "../../../lib/access";
+import { readSession } from "../../../lib/session";
+import {
+  APPROVAL_RISKS,
+  APPROVAL_STATUSES,
+  LIST_POLL_MS,
+  toolLabel,
+  type ApprovalListItem,
+  type ApprovalPage,
+} from "../../../lib/approvals";
+import { Button, ButtonLink } from "../../../components/ui/Button";
 import { Card } from "../../../components/ui/Card";
-import { Page, PageHeader } from "../../../components/ui/PageHeader";
+import { SelectField, TextField } from "../../../components/ui/Field";
+import { MetricCard } from "../../../components/ui/MetricCard";
+import { Page, PageHeader, SectionHeader } from "../../../components/ui/PageHeader";
 import { RiskBadge } from "../../../components/ui/RiskBadge";
+import { StatusBadge } from "../../../components/ui/StatusBadge";
+import { DataTable } from "../../../components/ui/DataTable";
 import { EmptyState, ErrorState, Skeleton } from "../../../components/ui/States";
-import { CodeBlock, Mono, TextLink } from "../../../components/ui/Type";
-import { useToast } from "../../../components/ui/Toast";
+import { Mono, Timestamp } from "../../../components/ui/Type";
 
-type Approval = {
-  id: string; status: string; tool: string; arguments: Record<string, string>; reason: string; risk: string;
-  requesterEmail: string; policyDecision: string; policyCode: string; traceId: string; runId: string; requiredRole: string;
-};
-
-export default function Approvals() {
-  const [rows, setRows] = useState<Approval[]>([]);
+export default function ApprovalsPage() {
+  const role = roleOf(readSession().current);
+  const canReview = canAccess(role, "approvals.review");
+  const [page, setPage] = useState<ApprovalPage | null>(null);
   const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
-  const [pendingId, setPendingId] = useState("");
   const [ready, setReady] = useState(false);
-  const toast = useToast();
+  const [status, setStatus] = useState("PENDING");
+  const [risk, setRisk] = useState("");
+  const [q, setQ] = useState("");
+  const [requester, setRequester] = useState("");
+  const [agent, setAgent] = useState("");
+  const [offset, setOffset] = useState(0);
+  const [attempt, setAttempt] = useState(0);
 
   function load() {
-    api<Approval[]>("/api/v1/approvals?status=PENDING").then((items) => { setError(""); setRows(items); }).catch((err) => setError(err.message)).finally(() => setReady(true));
+    const params = new URLSearchParams({ page: String(offset), size: "20" });
+    if (status) params.set("status", status);
+    if (risk) params.set("risk", risk);
+    if (q.trim()) params.set("q", q.trim());
+    if (requester.trim()) params.set("requester", requester.trim());
+    if (agent.trim()) params.set("agent", agent.trim());
+    api<ApprovalPage>(`/api/v1/approvals?${params}`)
+      .then((body) => { setError(""); setPage(body); })
+      .catch((err) => setError(err instanceof ApiError ? err.message : err.message))
+      .finally(() => setReady(true));
   }
-  useEffect(() => { load(); const id = window.setInterval(load, 3000); return () => window.clearInterval(id); }, []);
 
-  async function decide(id: string, approve: boolean) {
-    if (pendingId) return;
-    setNotice("");
-    setPendingId(id);
-    try {
-      await api(`/api/v1/approvals/${id}/${approve ? "approve" : "reject"}`, { method: "POST", body: JSON.stringify({ reason: approve ? "Reviewed" : "Declined" }) });
-      const text = approve ? "Approved. The same run will create one ticket." : "Rejected. No ticket will be created.";
-      setNotice(text);
-      toast(approve ? "success" : "warning", text);
-      load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Decision failed");
-    } finally {
-      setPendingId("");
-    }
-  }
+  useEffect(() => { load(); }, [attempt, offset, status, risk]);
+  useEffect(() => {
+    const timer = window.setInterval(() => setAttempt((value) => value + 1), LIST_POLL_MS);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const summary = page?.summary;
+  const pending = summary?.pending ?? 0;
+  const rows = page?.items ?? [];
+  const pendingRows = useMemo(() => rows.filter((row) => row.status === "PENDING"), [rows]);
 
   return (
     <Page width="wide">
-      <PageHeader eyebrow="Reviewer" title="Approval queue" description="Pending write actions. Approving resumes the same run and creates one ticket." />
-      {error && <ErrorState title="Unable to load approvals" onRetry={load}>{error}</ErrorState>}
-      {notice && <p className="text-sm text-success" role="status">{notice}</p>}
+      <PageHeader
+        title="Approvals"
+        description="Review sensitive actions requested by AegisTrace agents."
+        status={pending > 0 ? <StatusBadge status="PENDING" label={`${pending} pending`} /> : undefined}
+      />
+      {error && <ErrorState title="Unable to load approvals" onRetry={() => setAttempt((value) => value + 1)}>{error}</ErrorState>}
       {!error && !ready && <Skeleton className="h-24" />}
-      {!error && ready && rows.length === 0 && <EmptyState title="No pending approvals" actionHref="/runs/new" actionLabel="Start a support run">Nothing is waiting for a reviewer.</EmptyState>}
-      <div className="space-y-3">
-        {rows.map((row) => (
-          <Card key={row.id}>
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <h2 className="font-mono text-sm text-paper">{row.tool}</h2>
-              <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
-                <span>{row.policyDecision} · {row.requiredRole}</span>
-                <RiskBadge level={row.risk} />
-              </div>
+      {!error && ready && summary && (
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+          <MetricCard label="Pending" value={summary.pending} tone={summary.pending > 0 ? "warning" : "default"} hint="Approvals still waiting for a reviewer in this workspace." />
+          <MetricCard label="Approved today" value={summary.approvedToday} hint="Decided APPROVED since the start of today in database time." />
+          <MetricCard label="Rejected today" value={summary.rejectedToday} hint="Decided REJECTED since the start of today in database time." />
+          <MetricCard label="Expired" value={summary.expired} />
+          <MetricCard label="Cancelled" value={summary.cancelled} />
+        </div>
+      )}
+      {!error && ready && pending > 0 && (
+        <Card variant="warning">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-medium text-paper">{pending === 1 ? "1 pending approval" : `${pending} pending approvals`}</p>
+              <p className="mt-1 text-sm text-muted">Highest risk and nearest expiry are listed first.</p>
             </div>
-            <p className="mt-2 text-sm">{row.reason}</p>
-            <dl className="mt-3 grid gap-3 text-sm md:grid-cols-2">
-              <div><dt className="text-[11px] uppercase tracking-[0.12em] text-muted">Requester</dt><dd>{row.requesterEmail}</dd></div>
-              <div><dt className="text-[11px] uppercase tracking-[0.12em] text-muted">Policy</dt><dd>{row.policyCode}</dd></div>
-              <div><dt className="text-[11px] uppercase tracking-[0.12em] text-muted">Run</dt><dd><TextLink href={`/runs/${row.runId}`}><Mono>{row.runId}</Mono></TextLink></dd></div>
-              <div><dt className="text-[11px] uppercase tracking-[0.12em] text-muted">Trace</dt><dd><Mono>{row.traceId}</Mono></dd></div>
-            </dl>
-            <div className="mt-3"><CodeBlock value={JSON.stringify(row.arguments, null, 2)} /></div>
-            <div className="mt-3 flex gap-2">
-              <Button loading={pendingId === row.id} loadingLabel="Saving…" onClick={() => decide(row.id, true)}>Approve</Button>
-              <Button variant="danger" disabled={pendingId === row.id} onClick={() => decide(row.id, false)}>Reject</Button>
+            {pendingRows[0] && <ButtonLink href={`/approvals/${pendingRows[0].id}`}>Review now</ButtonLink>}
+          </div>
+        </Card>
+      )}
+      <Card>
+        <SectionHeader title="Queue" description={page?.ordering} />
+        <div className="mt-3 grid gap-3 md:grid-cols-2 lg:grid-cols-5">
+          <TextField label="Search" value={q} onChange={(event) => setQ(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { setOffset(0); setAttempt((value) => value + 1); } }} hint="Approval ID, run ID, tool, agent, or requester" />
+          <SelectField label="Status" value={status} onChange={(event) => { setStatus(event.target.value); setOffset(0); }}>
+            <option value="">All</option>
+            {APPROVAL_STATUSES.map((item) => <option key={item} value={item}>{item}</option>)}
+          </SelectField>
+          <SelectField label="Risk" value={risk} onChange={(event) => { setRisk(event.target.value); setOffset(0); }}>
+            <option value="">All</option>
+            {APPROVAL_RISKS.map((item) => <option key={item} value={item}>{item}</option>)}
+          </SelectField>
+          <TextField label="Requester" value={requester} onChange={(event) => setRequester(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { setOffset(0); setAttempt((value) => value + 1); } }} />
+          <TextField label="Agent" value={agent} onChange={(event) => setAgent(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { setOffset(0); setAttempt((value) => value + 1); } }} />
+        </div>
+        {!error && ready && rows.length === 0 && (
+          <div className="mt-4">
+            <EmptyState title={status === "PENDING" ? "No pending approvals" : "No approvals match"}>Nothing is waiting in this filter.</EmptyState>
+          </div>
+        )}
+        <ul className="mt-4 space-y-2 md:hidden">
+          {rows.map((row) => (
+            <li key={row.id}>
+              <Card variant="compact">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-sm text-paper">{toolLabel(row.tool)}</span>
+                  <StatusBadge status={row.status} />
+                </div>
+                <div className="mt-1 flex flex-wrap gap-2"><RiskBadge level={row.risk} /></div>
+                <p className="mt-1 text-xs text-muted">{row.requesterEmail} · <Timestamp value={row.requestedAt} /></p>
+                {canReview && <div className="mt-2"><ButtonLink href={`/approvals/${row.id}`} variant="secondary">Review action</ButtonLink></div>}
+              </Card>
+            </li>
+          ))}
+        </ul>
+        <div className="mt-4 hidden md:block">
+          <DataTable
+            rows={rows}
+            getKey={(row) => row.id}
+            empty={null}
+            columns={[
+              { key: "action", header: "Action", cell: (row) => <Link className="text-paper underline-offset-2 hover:underline" href={`/approvals/${row.id}`}>{toolLabel(row.tool)}</Link> },
+              { key: "tool", header: "Tool", cell: (row) => <Mono>{row.tool}</Mono> },
+              { key: "agent", header: "Agent", cell: (row) => <>{row.agentName} {row.agentVersion != null ? `v${row.agentVersion}` : ""}</> },
+              { key: "requester", header: "Requester", cell: (row) => row.requesterEmail },
+              { key: "risk", header: "Risk", cell: (row) => <RiskBadge level={row.risk} /> },
+              { key: "requested", header: "Requested", cell: (row) => <Timestamp value={row.requestedAt} /> },
+              { key: "expires", header: "Expires", cell: (row) => <Timestamp value={row.expiresAt} /> },
+              { key: "run", header: "Run", cell: (row) => <Mono>{row.runId.slice(0, 8)}</Mono> },
+              { key: "status", header: "Status", cell: (row) => <StatusBadge status={row.status} /> },
+            ]}
+            actions={(row: ApprovalListItem) => canReview ? <ButtonLink href={`/approvals/${row.id}`} variant="secondary">Review</ButtonLink> : null}
+          />
+        </div>
+        {page && page.total > page.size && (
+          <div className="mt-3 flex items-center justify-between text-sm text-muted">
+            <span>{page.total} approvals</span>
+            <div className="flex gap-2">
+              <Button variant="ghost" disabled={offset === 0} onClick={() => setOffset((value) => Math.max(0, value - 1))}>Previous</Button>
+              <Button variant="ghost" disabled={(offset + 1) * page.size >= page.total} onClick={() => setOffset((value) => value + 1)}>Next</Button>
             </div>
-          </Card>
-        ))}
-      </div>
+          </div>
+        )}
+      </Card>
     </Page>
   );
 }

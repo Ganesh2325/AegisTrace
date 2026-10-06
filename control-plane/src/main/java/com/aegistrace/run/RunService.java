@@ -37,6 +37,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -58,6 +59,7 @@ public class RunService {
     private final PolicyEngine policy = new PolicyEngine();
     private final MeterRegistry meters;
     private final Tracer tracer;
+    private final ApprovalService approvals;
     private final ExecutorService executor = Executors.newFixedThreadPool(8, runnable -> {
         Thread thread = new Thread(runnable, "aegis-run");
         thread.setDaemon(true);
@@ -65,7 +67,8 @@ public class RunService {
     });
 
     public RunService(NamedParameterJdbcTemplate jdbc, TransactionTemplate tx, ObjectMapper mapper, AuditService audit,
-                      RunEventBus events, RuntimeClient runtime, MeterRegistry meters, ObjectProvider<Tracer> tracer) {
+                      RunEventBus events, RuntimeClient runtime, MeterRegistry meters, ObjectProvider<Tracer> tracer,
+                      ApprovalService approvals) {
         this.jdbc = jdbc;
         this.tx = tx;
         this.mapper = mapper;
@@ -74,6 +77,7 @@ public class RunService {
         this.runtime = runtime;
         this.meters = meters;
         this.tracer = tracer.getIfAvailable(() -> Tracer.NOOP);
+        this.approvals = approvals;
     }
 
     public Map<String, Object> create(Actor actor, UUID workspaceId, String question, UUID agentId) {
@@ -317,13 +321,22 @@ public class RunService {
 
     public Map<String, Object> decide(Actor actor, UUID workspaceId, UUID approvalId, boolean approve, String reason) {
         var membership = actor.membership(workspaceId);
-        if (membership == null || !(membership.role().equals("REVIEWER") || membership.role().equals("ADMIN"))) {
+        if (membership == null || !ApprovalAccess.canDecide(membership.role())) {
             throw new ApiException("FORBIDDEN", "Your role cannot decide approvals.", 403);
         }
+        String trimmedReason = reason == null ? "" : reason.trim();
+        if (!approve) {
+            if (trimmedReason.isEmpty()) {
+                throw new ApiException("VALIDATION_FAILED", "A rejection reason is required.", 400);
+            }
+            if (trimmedReason.length() > 2000) {
+                throw new ApiException("VALIDATION_FAILED", "The rejection reason is too long.", 400);
+            }
+        }
         UUID[] expiredRun = new UUID[1];
-        Map<String, Object> body = tx.execute(status -> {
+        tx.executeWithoutResult(status -> {
             var rows = jdbc.query("""
-                    select a.status, a.required_role, a.expires_at, a.run_id, a.proposal_id,
+                    select a.status, a.required_role, a.expires_at, a.run_id, a.proposal_id, a.requester_id,
                            p.tool_name, p.arguments::text as arguments
                     from approvals a join tool_proposals p on p.id = a.proposal_id
                     where a.id = :id and a.workspace_id = :workspace for update of a
@@ -333,6 +346,7 @@ public class RunService {
                     rs.getTimestamp("expires_at").toInstant(),
                     UUID.fromString(rs.getString("run_id")),
                     UUID.fromString(rs.getString("proposal_id")),
+                    UUID.fromString(rs.getString("requester_id")),
                     rs.getString("tool_name"),
                     rs.getString("arguments")
             ));
@@ -343,21 +357,46 @@ public class RunService {
             String state = row.status();
             UUID runId = row.runId();
             if (!"PENDING".equals(state)) {
-                return approvalView(approvalId);
+                if (ApprovalStateMachine.isIdempotentReplay(state, approve)) {
+                    return;
+                }
+                throw new ApiException(ApprovalStateMachine.conflictCode(state),
+                        ApprovalStateMachine.conflictMessage(state, approve), 409, runId);
             }
             if (row.expiresAt().isBefore(Instant.now())) {
-                jdbc.update("update approvals set status = 'EXPIRED', decided_at = now() where id = :id", Map.of("id", approvalId));
+                int expired = jdbc.update("""
+                        update approvals set status = 'EXPIRED', decided_at = now()
+                        where id = :id and status = 'PENDING'
+                        """, Map.of("id", approvalId));
+                if (expired == 1) {
+                    events.append(runId, "APPROVAL_EXPIRED", "APPROVAL_REQUIRED", Map.of("approvalId", approvalId));
+                    audit.record(workspaceId, actor.id(), "APPROVAL_EXPIRED", "approval", approvalId.toString(), runId, Map.of());
+                }
                 expiredRun[0] = runId;
-                return null;
+                return;
             }
             if ("ADMIN".equals(row.requiredRole()) && !"ADMIN".equals(membership.role())) {
                 throw new ApiException("FORBIDDEN", "This approval requires an admin.", 403);
             }
+            if (!ApprovalAccess.canDecideThis(membership.role(), actor.id(), row.requesterId())) {
+                throw new ApiException("FORBIDDEN", "You cannot approve or reject an action you requested.", 403);
+            }
+            String runState = jdbc.queryForObject(
+                    "select state from agent_runs where id = :id for update", Map.of("id", runId), String.class);
+            if (!"APPROVAL_REQUIRED".equals(runState)) {
+                throw new ApiException("CONFLICT", "The run is no longer executable.", 409, runId);
+            }
+            String nextStatus = approve ? "APPROVED" : "REJECTED";
+            int changed = jdbc.update("""
+                    update approvals
+                    set status = :status, reviewer_id = :reviewer, decision_reason = :reason, decided_at = now()
+                    where id = :id and status = 'PENDING' and expires_at > now()
+                    """, Map.of("id", approvalId, "status", nextStatus, "reviewer", actor.id(),
+                    "reason", trimmedReason));
+            if (changed != 1) {
+                throw new ApiException("CONFLICT", "The approval is no longer pending.", 409, runId);
+            }
             if (approve) {
-                jdbc.update("""
-                        update approvals set status = 'APPROVED', reviewer_id = :reviewer, decision_reason = :reason, decided_at = now()
-                        where id = :id and status = 'PENDING'
-                        """, Map.of("id", approvalId, "reviewer", actor.id(), "reason", reason == null ? "" : reason));
                 if (!transition(runId, "APPROVED") || !transition(runId, "TOOL_EXECUTING")) {
                     throw new ApiException("CONFLICT", "The run can no longer be approved.", 409, runId);
                 }
@@ -377,31 +416,27 @@ public class RunService {
                         .addValue("workspace", workspaceId)
                         .addValue("payload", Jsons.jsonb(Jsons.write(mapper, payload)))
                         .addValue("key", "tool-exec:" + row.proposalId()));
-                events.append(runId, "APPROVAL_APPROVED", "TOOL_EXECUTING", Map.of("approvalId", approvalId));
+                events.append(runId, "APPROVAL_APPROVED", "TOOL_EXECUTING", Map.of("approvalId", approvalId, "proposalId", row.proposalId()));
                 events.append(runId, "TOOL_STARTED", "TOOL_EXECUTING", Map.of("tool", row.toolName()));
                 audit.record(workspaceId, actor.id(), "APPROVAL_APPROVED", "approval", approvalId.toString(), runId, Map.of(
-                        "tool", row.toolName()));
+                        "tool", row.toolName(), "proposalId", row.proposalId().toString(), "reason", trimmedReason));
             } else {
-                jdbc.update("""
-                        update approvals set status = 'REJECTED', reviewer_id = :reviewer, decision_reason = :reason, decided_at = now()
-                        where id = :id and status = 'PENDING'
-                        """, Map.of("id", approvalId, "reviewer", actor.id(), "reason", reason == null ? "" : reason));
                 if (!transition(runId, "REJECTED")) {
                     throw new ApiException("CONFLICT", "The run can no longer be rejected.", 409, runId);
                 }
-                events.append(runId, "APPROVAL_REJECTED", "REJECTED", Map.of("approvalId", approvalId));
-                audit.record(workspaceId, actor.id(), "APPROVAL_REJECTED", "approval", approvalId.toString(), runId, Map.of());
+                events.append(runId, "APPROVAL_REJECTED", "REJECTED", Map.of("approvalId", approvalId, "reason", trimmedReason));
+                audit.record(workspaceId, actor.id(), "APPROVAL_REJECTED", "approval", approvalId.toString(), runId, Map.of(
+                        "reason", trimmedReason, "proposalId", row.proposalId().toString()));
                 String draft = jdbc.queryForObject("select coalesce(draft_answer, '') from agent_runs where id = :id",
                         Map.of("id", runId), String.class);
                 complete(runId, draft + "\n\nA reviewer declined the proposed support ticket. No ticket was created.", null);
             }
-            return approvalView(approvalId);
         });
         if (expiredRun[0] != null) {
             fail(expiredRun[0], "APPROVAL_EXPIRED", "APPROVAL_EXPIRED", "The approval expired before a decision.");
             throw new ApiException("APPROVAL_EXPIRED", "The approval has expired.", 409, expiredRun[0]);
         }
-        return body;
+        return approvals.get(actor, workspaceId, approvalId);
     }
 
     public void toolResult(UUID runId, Map<String, Object> body) {
@@ -447,10 +482,7 @@ public class RunService {
             if (!transition(runId, "CANCELLED")) {
                 throw new ApiException("CONFLICT", "The run is already finished.", 409, runId);
             }
-            jdbc.update("""
-                    update approvals set status = 'CANCELLED', decided_at = now()
-                    where run_id = :id and status = 'PENDING'
-                    """, Map.of("id", runId));
+            List<UUID> cancelled = closePendingApprovals(runId, "CANCELLED");
             jdbc.update("""
                     update agent_runs set ended_at = now(), failure_category = 'CANCELLED', error_code = 'CANCELLED',
                         error_message = 'The run was cancelled.'
@@ -458,6 +490,10 @@ public class RunService {
                     """, Map.of("id", runId));
             events.append(runId, "RUN_CANCELLED", "CANCELLED", Map.of());
             audit.record(workspaceId, actor.id(), "RUN_CANCELLED", "agent_run", runId.toString(), runId, Map.of());
+            for (UUID approvalId : cancelled) {
+                events.append(runId, "APPROVAL_CANCELLED", "CANCELLED", Map.of("approvalId", approvalId));
+                audit.record(workspaceId, actor.id(), "APPROVAL_CANCELLED", "approval", approvalId.toString(), runId, Map.of());
+            }
         });
         return execution(actor, workspaceId, runId);
     }
@@ -570,17 +606,6 @@ public class RunService {
             row.put("policyCode", rs.getString("policy_code"));
             return row;
         });
-    }
-
-    public List<Map<String, Object>> listApprovals(UUID workspaceId, String status) {
-        String filter = status == null || status.isBlank() ? "" : " and a.status = :status ";
-        var params = new MapSqlParameterSource().addValue("workspace", workspaceId).addValue("status", status);
-        return jdbc.query("""
-                select a.id from approvals a
-                where a.workspace_id = :workspace
-                """ + filter + """
-                order by a.requested_at desc limit 100
-                """, params, (rs, n) -> approvalView(UUID.fromString(rs.getString("id"))));
     }
 
     private RuntimeClient.Plan callRuntime(RunRow run, Map<String, Object> snapshot) {
@@ -700,6 +725,7 @@ public class RunService {
 
     private void fail(UUID runId, String category, String code, String message) {
         String target = "TIMED_OUT".equals(category) ? "TIMED_OUT" : "FAILED";
+        List<UUID> closed = new ArrayList<>();
         Boolean changed = tx.execute(status -> {
             String state = jdbc.queryForObject("select state from agent_runs where id = :id for update", Map.of("id", runId), String.class);
             if (RunStateMachine.isTerminal(state) || !RunStateMachine.canTransition(state, target)) {
@@ -715,13 +741,33 @@ public class RunService {
                     .addValue("code", code)
                     .addValue("message", message)
                     .addValue("id", runId));
+            closed.addAll(closePendingApprovals(runId, "CANCELLED"));
             return true;
         });
         if (Boolean.TRUE.equals(changed)) {
             events.append(runId, "TIMED_OUT".equals(target) ? "RUN_TIMED_OUT" : "RUN_FAILED", target, Map.of(
                     "category", category, "code", code));
             meters.counter("aegis.runs", "result", target.toLowerCase()).increment();
+            UUID workspaceId = jdbc.queryForObject("select workspace_id from agent_runs where id = :id", Map.of("id", runId), UUID.class);
+            for (UUID approvalId : closed) {
+                events.append(runId, "APPROVAL_CANCELLED", target, Map.of("approvalId", approvalId));
+                audit.record(workspaceId, null, "APPROVAL_CANCELLED", "approval", approvalId.toString(), runId, Map.of("runFailure", code));
+            }
         }
+    }
+
+    private List<UUID> closePendingApprovals(UUID runId, String toStatus) {
+        List<UUID> ids = jdbc.query(
+                "select id from approvals where run_id = :id and status = 'PENDING' for update",
+                Map.of("id", runId), (rs, n) -> UUID.fromString(rs.getString("id")));
+        if (ids.isEmpty()) {
+            return ids;
+        }
+        jdbc.update("""
+                update approvals set status = :status, decided_at = now()
+                where run_id = :id and status = 'PENDING'
+                """, Map.of("id", runId, "status", toStatus));
+        return ids;
     }
 
     private void enqueueEvaluation(UUID runId) {
@@ -1015,17 +1061,19 @@ public class RunService {
     private record ToolDef(String name, String classification, boolean approvalRequired, String permission) {}
 
     private record ApprovalRow(String status, String requiredRole, Instant expiresAt, UUID runId, UUID proposalId,
-                               String toolName, String arguments) {}
+                               UUID requesterId, String toolName, String arguments) {}
 }
 
 @RestController
 @RequestMapping("/api/v1")
 class RunController {
     private final RunService runs;
+    private final ApprovalService approvals;
     private final Rbac rbac;
 
-    RunController(RunService runs, Rbac rbac) {
+    RunController(RunService runs, ApprovalService approvals, Rbac rbac) {
         this.runs = runs;
+        this.approvals = approvals;
         this.rbac = rbac;
     }
 
@@ -1076,9 +1124,22 @@ class RunController {
     }
 
     @GetMapping("/approvals")
-    List<Map<String, Object>> approvals(HttpServletRequest request, @RequestParam(required = false) String status) {
+    Map<String, Object> listApprovals(HttpServletRequest request,
+                                      @RequestParam(required = false) String status,
+                                      @RequestParam(required = false) String risk,
+                                      @RequestParam(required = false) String q,
+                                      @RequestParam(required = false) String requester,
+                                      @RequestParam(required = false) String agent,
+                                      @RequestParam(defaultValue = "0") int page,
+                                      @RequestParam(defaultValue = "20") int size) {
         var membership = rbac.require(request, "REVIEWER", "ADMIN");
-        return runs.listApprovals(membership.workspaceId(), status);
+        return approvals.list(rbac.current(), membership.workspaceId(), status, risk, q, requester, agent, page, size);
+    }
+
+    @GetMapping("/approvals/{id}")
+    Map<String, Object> getApproval(HttpServletRequest request, @PathVariable UUID id) {
+        var membership = rbac.require(request, "REVIEWER", "ADMIN");
+        return approvals.get(rbac.current(), membership.workspaceId(), id);
     }
 
     @PostMapping("/approvals/{id}/approve")

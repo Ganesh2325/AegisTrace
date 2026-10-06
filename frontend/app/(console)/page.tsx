@@ -231,7 +231,7 @@ function Dashboard() {
                         <Timestamp value={row.requestedAt} />
                       </div>
                       <p className="mt-1 text-sm text-paper">{row.tool}</p>
-                      <Link className="mt-1 inline-block text-xs text-info hover:underline" href="/approvals">Review</Link>
+                      <Link className="mt-1 inline-block text-xs text-info hover:underline" href={`/approvals/${row.id}`}>Review action</Link>
                     </li>
                   ))}
                 </ul>

@@ -5,6 +5,7 @@ export type Capability =
   | "runs.read"
   | "runs.create"
   | "approvals.read"
+  | "approvals.review"
   | "agents.read"
   | "agents.configure"
   | "knowledge.read"
@@ -50,6 +51,7 @@ const ALL: Capability[] = [
   "runs.read",
   "runs.create",
   "approvals.read",
+  "approvals.review",
   "agents.read",
   "agents.configure",
   "knowledge.read",
@@ -62,7 +64,7 @@ const ALL: Capability[] = [
 
 const ROLE_CAPABILITIES: Record<Role, Capability[]> = {
   OPERATOR: ["overview.read", "runs.read", "runs.create", "agents.read", "knowledge.read", "observability.read"],
-  REVIEWER: ["overview.read", "runs.read", "approvals.read", "agents.read", "observability.read"],
+  REVIEWER: ["overview.read", "runs.read", "approvals.read", "approvals.review", "agents.read", "observability.read"],
   DEVELOPER: ["overview.read", "runs.read", "agents.read", "agents.configure", "knowledge.read", "knowledge.manage", "evaluation.read", "observability.read", "audit.read", "admin.console"],
   ADMIN: ALL,
 };
@@ -70,7 +72,7 @@ const ROLE_CAPABILITIES: Record<Role, Capability[]> = {
 export const NAV_ITEMS: NavItem[] = [
   { label: "Overview", href: "/", icon: "overview", capability: "overview.read", description: "Workspace operations", group: "workspace", match: (path) => path === "/" },
   { label: "Support run", href: "/runs/new", icon: "run", capability: "runs.create", description: "Start a support run", group: "workspace", match: (path) => path === "/runs/new" || path.startsWith("/runs/") },
-  { label: "Approvals", href: "/approvals", icon: "approval", capability: "approvals.read", description: "Pending write approvals", group: "workspace", match: (path) => path === "/approvals" || path.startsWith("/approvals/") },
+  { label: "Approvals", href: "/approvals", icon: "approval", capability: "approvals.read", description: "Review sensitive agent actions", group: "workspace", match: (path) => path === "/approvals" || path.startsWith("/approvals/") },
   { label: "Agents", href: "/agents", icon: "agent", capability: "agents.read", description: "Agent versions and configuration", group: "build", match: (path) => path === "/agents" || path.startsWith("/agents/") },
   { label: "Knowledge", href: "/knowledge", icon: "knowledge", capability: "knowledge.read", description: "Document corpus", group: "build", match: (path) => path === "/knowledge" || path.startsWith("/knowledge/") },
   { label: "Evaluation", href: "/evaluations", icon: "evaluation", capability: "evaluation.read", description: "Heuristic evaluation checks", group: "intelligence", match: (path) => path === "/evaluations" || path.startsWith("/evaluations/") },
@@ -164,6 +166,8 @@ export function breadcrumb(role: string, pathname: string): { href?: string; lab
   if (agent) return [{ href: "/agents", label: "Agents" }, { label: "Agent" }];
   const knowledgeDoc = pathname.match(/^\/knowledge\/documents\/([^/]+)$/);
   if (knowledgeDoc) return [{ href: "/knowledge", label: "Knowledge" }, { label: "Document" }];
+  const approval = pathname.match(/^\/approvals\/([^/]+)$/);
+  if (approval) return [{ href: "/approvals", label: "Approvals" }, { label: "Review" }];
   const run = pathname.match(/^\/runs\/([^/]+)$/);
   if (!run || run[1] === "new") return [];
   const parent = canAccess(role, "runs.create") ? [{ href: "/runs/new", label: "Support run" }] : [];

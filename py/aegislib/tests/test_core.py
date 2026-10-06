@@ -3,6 +3,7 @@ from aegislib.embedding import embed, cosine
 from aegislib.grounding import ABSTAIN, grounded_answer, rank_chunks
 from aegislib.planner import merge_model_proposal, propose_tool
 from aegislib.retries import backoff_seconds, classify_retry
+from aegislib.execution import ExecutionError, execute_ticket, execution_key
 
 from corpus import load_corpus
 
@@ -101,3 +102,58 @@ def test_retry_matrix():
     assert classify_retry("PROMPT_INJECTION") is False
     assert backoff_seconds(1) == 2
     assert backoff_seconds(10) == 60
+
+
+class _Cursor:
+    def __init__(self, conn):
+        self.conn = conn
+        self._row = None
+        self.rowcount = 0
+
+    def execute(self, sql, params=None):
+        text = sql.lower()
+        if "from agent_runs" in text:
+            self._row = (self.conn.run_state,)
+        elif "from approvals" in text:
+            self._row = self.conn.approval
+        else:
+            self._row = None
+
+    def fetchone(self):
+        return self._row
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+
+class _Conn:
+    def __init__(self, run_state, approval):
+        self.run_state = run_state
+        self.approval = approval
+
+    def cursor(self):
+        return _Cursor(self)
+
+
+def test_execution_key_is_run_and_proposal():
+    assert execution_key("run-1", "proposal-1") == "run-1:proposal-1"
+
+
+def test_worker_skips_cancelled_runs_without_writing():
+    job = {"payload": {"runId": "r1", "proposalId": "p1", "workspaceId": "w1", "approvalId": "a1", "arguments": {}}}
+    result = execute_ticket(_Conn("CANCELLED", ("APPROVED", False, "p1", "r1")), job)
+    assert result["status"] == "SKIPPED"
+    assert result["reason"] == "CANCELLED"
+
+
+def test_worker_rejects_mismatched_proposal_identity():
+    job = {"payload": {"runId": "r1", "proposalId": "p1", "workspaceId": "w1", "approvalId": "a1", "arguments": {}}}
+    try:
+        execute_ticket(_Conn("TOOL_EXECUTING", ("APPROVED", False, "other-proposal", "r1")), job)
+        raise AssertionError("expected ExecutionError")
+    except ExecutionError as exc:
+        assert exc.error_type == "APPROVAL_EXPIRED"
+        assert exc.retryable is False

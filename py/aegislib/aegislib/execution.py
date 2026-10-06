@@ -40,13 +40,19 @@ def execute_ticket(conn, job: dict[str, Any], simulate: str | None = None) -> di
 
         cur.execute(
             """
-            select status, expires_at <= now() as expired
+            select status, expires_at <= now() as expired, proposal_id::text, run_id::text
             from approvals where id = %s
             """,
             (payload["approvalId"],),
         )
         approval = cur.fetchone()
-        if approval is None or approval[0] != "APPROVED" or approval[1]:
+        if (
+            approval is None
+            or approval[0] != "APPROVED"
+            or approval[1]
+            or str(approval[2]) != proposal_id
+            or str(approval[3]) != run_id
+        ):
             _record_execution(
                 cur,
                 workspace_id,

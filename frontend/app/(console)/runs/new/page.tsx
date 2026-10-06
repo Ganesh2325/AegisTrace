@@ -314,8 +314,8 @@ function SupportRunWorkspace() {
                   The agent proposed a support-ticket action. A reviewer must approve it before execution.
                 </p>
                 <div className="mt-2"><StatusBadge status="APPROVAL_REQUIRED" /></div>
-                {payload.capabilities.canReadApprovals && (
-                  <div className="mt-3"><ButtonLink href="/approvals" variant="secondary">Open approvals</ButtonLink></div>
+                {payload.capabilities.canReadApprovals && payload.approval?.id && (
+                  <div className="mt-3"><ButtonLink href={`/approvals/${payload.approval.id}`} variant="secondary">Review action</ButtonLink></div>
                 )}
               </Card>
             )}
