@@ -2,13 +2,40 @@
 @tailwind components;
 @tailwind utilities;
 
-:root { color-scheme: dark; }
-body { @apply bg-ink text-paper antialiased; }
-button, a, input, textarea, select { @apply focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber; }
-.panel { @apply rounded-md border border-line bg-panel; }
+:root {
+  color-scheme: dark;
+  /* RGB channels so Tailwind opacity modifiers resolve. */
+  --canvas: 16 20 26;          /* #10141a */
+  --surface: 22 28 36;         /* #161c24 */
+  --elevated: 28 36 46;        /* #1c242e */
+  --overlay: 36 48 65;         /* #243041 */
+  --line: 46 57 72;            /* #2e3948 */
+  --line-strong: 68 82 102;    /* #445266 */
+  --paper: 231 237 244;        /* #e7edf4 */
+  --muted: 154 168 186;        /* #9aa8ba */
+  --faint: 132 147 166;        /* #8493a6 */
+  --accent: 224 160 69;        /* #e0a045 */
+  --success: 60 191 142;       /* #3cbf8e */
+  --warning: 224 160 69;       /* #e0a045 */
+  --danger: 230 112 112;        /* #e67070 */
+  --info: 121 184 255;         /* #79b8ff */
+}
+
+body { @apply bg-canvas text-paper antialiased; }
+button, a, input, textarea, select { @apply focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent; }
+
+.panel { @apply rounded-md border border-line bg-elevated; }
 .btn { @apply inline-flex items-center justify-center rounded-md px-3 py-2 text-sm font-medium disabled:opacity-50; }
-.btn-primary { @apply btn bg-amber text-ink hover:bg-amber/90; }
+.btn-primary { @apply btn bg-accent text-canvas hover:bg-accent/90; }
 .btn-ghost { @apply btn border border-line hover:bg-white/5; }
-.btn-danger { @apply btn bg-rose/90 text-white hover:bg-rose; }
-.field { @apply w-full rounded-md border border-line bg-ink px-3 py-2 text-sm; }
-.kicker { @apply text-xs uppercase tracking-[0.16em] text-mist; }
+.btn-danger { @apply btn bg-danger text-white hover:bg-danger/90; }
+.field { @apply w-full rounded-md border border-line bg-canvas px-3 py-2 text-sm; }
+.kicker { @apply text-[11px] font-medium uppercase tracking-[0.14em] text-muted; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

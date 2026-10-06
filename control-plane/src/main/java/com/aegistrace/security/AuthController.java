@@ -16,6 +16,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.Duration;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -71,13 +72,15 @@ class AuthService {
     private final PasswordEncoder passwordEncoder;
     private final JwtService jwtService;
     private final com.aegistrace.audit.AuditService audit;
+    private final AppProperties properties;
 
     AuthService(NamedParameterJdbcTemplate jdbc, PasswordEncoder passwordEncoder, JwtService jwtService,
-                com.aegistrace.audit.AuditService audit) {
+                com.aegistrace.audit.AuditService audit, AppProperties properties) {
         this.jdbc = jdbc;
         this.passwordEncoder = passwordEncoder;
         this.jwtService = jwtService;
         this.audit = audit;
+        this.properties = properties;
     }
 
     Session login(String email, String password) {
@@ -115,15 +118,27 @@ class AuthService {
     }
 
     Map<String, Object> me(Actor actor) {
-        return Map.of(
-                "id", actor.id(),
-                "email", actor.email(),
-                "displayName", actor.displayName(),
-                "memberships", actor.memberships().stream().map(m -> Map.of(
-                        "workspaceId", m.workspaceId(),
-                        "role", m.role()
-                )).toList()
-        );
+        Map<UUID, String> names = workspaceNames(actor.memberships().stream().map(Actor.Membership::workspaceId).toList());
+        var body = new LinkedHashMap<String, Object>();
+        body.put("id", actor.id());
+        body.put("email", actor.email());
+        body.put("displayName", actor.displayName());
+        body.put("environment", properties.getEnvironment());
+        body.put("memberships", actor.memberships().stream().map(m -> Map.of(
+                "workspaceId", m.workspaceId(),
+                "role", m.role(),
+                "workspaceName", names.getOrDefault(m.workspaceId(), "")
+        )).toList());
+        return body;
+    }
+
+    private Map<UUID, String> workspaceNames(List<UUID> ids) {
+        if (ids.isEmpty()) return Map.of();
+        Map<UUID, String> names = new LinkedHashMap<>();
+        jdbc.query("select id, name from workspaces where id in (:ids)", Map.of("ids", ids), rs -> {
+            names.put(UUID.fromString(rs.getString("id")), rs.getString("name"));
+        });
+        return names;
     }
 
     Actor loadActor(UUID userId) {

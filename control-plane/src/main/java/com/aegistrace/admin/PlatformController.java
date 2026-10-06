@@ -1,6 +1,8 @@
 package com.aegistrace.admin;
 
 import com.aegistrace.audit.AuditService;
+import com.aegistrace.metrics.MetricsService;
+import com.aegistrace.metrics.OperationsService;
 import com.aegistrace.common.ApiException;
 import com.aegistrace.common.Jsons;
 import com.aegistrace.config.AppProperties;
@@ -36,16 +38,20 @@ class PlatformController {
     private final Rbac rbac;
     private final AppProperties properties;
     private final ObjectMapper mapper;
+    private final MetricsService metrics;
+    private final OperationsService operations;
     private final PolicyEngine policy = new PolicyEngine();
 
     PlatformController(NamedParameterJdbcTemplate jdbc, PasswordEncoder passwords, AuditService audit, Rbac rbac,
-                       AppProperties properties, ObjectMapper mapper) {
+                       AppProperties properties, ObjectMapper mapper, MetricsService metrics, OperationsService operations) {
         this.jdbc = jdbc;
         this.passwords = passwords;
         this.audit = audit;
         this.rbac = rbac;
         this.properties = properties;
         this.mapper = mapper;
+        this.metrics = metrics;
+        this.operations = operations;
     }
 
     @GetMapping("/audit")
@@ -74,68 +80,17 @@ class PlatformController {
 
     @GetMapping("/metrics/summary")
     Map<String, Object> metrics(HttpServletRequest request) {
-        var membership = rbac.require(request, "OPERATOR", "DEVELOPER", "REVIEWER", "ADMIN");
-        return jdbc.queryForObject("""
-                select count(*) as runs,
-                       count(*) filter (where state = 'COMPLETED') as completed,
-                       count(*) filter (where state = 'FAILED') as failed,
-                       count(*) filter (where state = 'TIMED_OUT') as timed_out,
-                       coalesce(sum(input_tokens + output_tokens), 0) as tokens,
-                       coalesce(sum(estimated_cost_usd), 0) as cost,
-                       coalesce(percentile_cont(0.5) within group (order by extract(epoch from (ended_at - started_at)) * 1000)
-                           filter (where ended_at is not null and started_at is not null), 0) as p50,
-                       coalesce(percentile_cont(0.95) within group (order by extract(epoch from (ended_at - started_at)) * 1000)
-                           filter (where ended_at is not null and started_at is not null), 0) as p95,
-                       coalesce(percentile_cont(0.99) within group (order by extract(epoch from (ended_at - started_at)) * 1000)
-                           filter (where ended_at is not null and started_at is not null), 0) as p99
-                from agent_runs where workspace_id = :workspace
-                """, Map.of("workspace", membership.workspaceId()), (rs, n) -> {
-            long runs = rs.getLong("runs");
-            long completed = rs.getLong("completed");
-            long failed = rs.getLong("failed");
-            Long pending = jdbc.queryForObject(
-                    "select count(*) from approvals where workspace_id = :workspace and status = 'PENDING'",
-                    Map.of("workspace", membership.workspaceId()), Long.class);
-            Long denials = jdbc.queryForObject("""
-                    select count(*) from tool_proposals p join agent_runs r on r.id = p.run_id
-                    where r.workspace_id = :workspace and p.policy_decision = 'DENY'
-                    """, Map.of("workspace", membership.workspaceId()), Long.class);
-            Long decisions = jdbc.queryForObject("""
-                    select count(*) from tool_proposals p join agent_runs r on r.id = p.run_id
-                    where r.workspace_id = :workspace and p.policy_decision is not null
-                    """, Map.of("workspace", membership.workspaceId()), Long.class);
-            Double approvalWait = jdbc.queryForObject("""
-                    select coalesce(avg(extract(epoch from (decided_at - requested_at)) * 1000), 0)
-                    from approvals where workspace_id = :workspace and decided_at is not null
-                    """, Map.of("workspace", membership.workspaceId()), Double.class);
-            Long queue = jdbc.queryForObject(
-                    "select count(*) from jobs where status in ('PENDING','RETRY','RUNNING')", Map.of(), Long.class);
-            Long evals = jdbc.queryForObject(
-                    "select count(*) from evaluations where workspace_id = :workspace", Map.of("workspace", membership.workspaceId()), Long.class);
-            Long evalPass = jdbc.queryForObject(
-                    "select count(*) from evaluations where workspace_id = :workspace and passed", Map.of("workspace", membership.workspaceId()), Long.class);
-            var body = new LinkedHashMap<String, Object>();
-            body.put("runs", runs);
-            body.put("completed", completed);
-            body.put("failed", failed);
-            body.put("timedOut", rs.getLong("timed_out"));
-            body.put("completionRate", runs == 0 ? 0 : (double) completed / runs);
-            body.put("failureRate", runs == 0 ? 0 : (double) failed / runs);
-            body.put("p50Ms", rs.getDouble("p50"));
-            body.put("p95Ms", rs.getDouble("p95"));
-            body.put("p99Ms", rs.getDouble("p99"));
-            body.put("tokens", rs.getLong("tokens"));
-            body.put("estimatedCostUsd", rs.getBigDecimal("cost"));
-            body.put("pendingApprovals", pending);
-            body.put("policyDenials", denials);
-            body.put("policyDecisions", decisions);
-            body.put("policyDenialRate", decisions == null || decisions == 0 ? 0 : (double) denials / decisions);
-            body.put("approvalWaitMs", approvalWait);
-            body.put("queueDepth", queue);
-            body.put("evaluations", evals);
-            body.put("evaluationPassRate", evals == null || evals == 0 ? 0 : (double) evalPass / evals);
-            return body;
-        });
+        var membership = rbac.require(request, MetricsService.READ_ROLES);
+        return metrics.summary(membership.workspaceId());
+    }
+
+    @GetMapping("/operations/overview")
+    Map<String, Object> operations(HttpServletRequest request,
+                                   @RequestParam(defaultValue = "ALL") String window,
+                                   @RequestParam(defaultValue = "ALL") String status,
+                                   @RequestParam(defaultValue = "0") int page) {
+        var membership = rbac.require(request, MetricsService.READ_ROLES);
+        return operations.overview(rbac.current(), membership.workspaceId(), window, status, page, java.time.Instant.now());
     }
 
     @GetMapping("/evaluations")

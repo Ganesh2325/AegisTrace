@@ -8,6 +8,18 @@ The model proposes. The control plane decides. A human approves the write. A wor
 
 Connecting a model to a ticket tool produces a demo that can write. It does not produce a system that can pause, explain, or prove the write. AegisTrace is that pause, and the record around it.
 
+## Console
+
+The signed-in console is a control surface, not a chat product.
+
+- **Operations.** Workspace KPIs from stored runs, approvals, and jobs. Completion and failure use finished runs. Timeouts count as unsuccessful. Cancelled runs do not. Empty rates are `NO_DATA`, not 0%. Cost is `$0.00` only when the model is configured at zero; unknown prices are `PRICING_UNAVAILABLE`. Operators see counts, not approval payloads. Windows are rolling UTC hours (`24H`, `7D`, `30D`, `ALL`).
+- **Support run.** The operator starts a run and sees status, evidence, the grounded answer, a tool proposal, the policy decision, and approval wait. The write tool is not executed from this page. After create, the URL is `/runs/new?run={id}` so refresh recovers the same run.
+- **Run detail.** Timeline, citations, tokens, and cancel for a single run.
+- **Approvals.** Reviewers and admins decide writes. A second approve does not create a second ticket.
+- **Shell.** Navigation follows server roles (Operator, Reviewer, Developer, Admin). Direct URLs without the capability show a restricted state. The environment label is `LOCAL` in development Compose.
+
+Shared UI pieces: status and risk badges, cards, tables, form fields, empty and error states, duration formatting.
+
 ## Why a chatbot demo is not enough
 
 A chat transcript does not show which agent version ran, which chunks were retrieved, which policy decision fired, who approved the write, or whether a retried job created a second ticket. Those are the product.
@@ -112,7 +124,7 @@ A run of that script in this workspace produced `evaluation/latest-report.json` 
 
 `scripts/benchmark.py` measures the API you point it at and writes `benchmarks/results/`. This repository does not ship a hand-written latency table. Do not cite a speedup that the script did not print.
 
-What is designed for responsiveness: the run API returns after the insert, work continues on a pool of 8 threads, uploads and embeddings are jobs, lists are paginated, and the UI polls if the event stream drops.
+What is designed for responsiveness: the run API returns after the insert, work continues on a pool of 8 threads, uploads and embeddings are jobs, lists are paginated, and the support-run page follows the event stream with a short reconcile poll if the proxy buffers events.
 
 ## Cost
 
@@ -204,4 +216,4 @@ python scripts/scan_secrets.py
 
 CI is `.github/workflows/ci.yml`.
 
-In this workspace, after the code was written: Java reported 16 tests passed, pytest reported 7 passed, and the evaluation script reported 0 failures across 30 cases. Those commands are the evidence. Run them again rather than trusting this paragraph after the code changes.
+In this workspace, after the code was written: Java reported 57 tests passed, pytest reported 7 passed, and the evaluation script reported 0 failures across 30 cases. Those commands are the evidence. Run them again rather than trusting this paragraph after the code changes.

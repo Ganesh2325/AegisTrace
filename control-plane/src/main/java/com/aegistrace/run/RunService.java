@@ -160,7 +160,7 @@ public class RunService {
             });
         });
         meters.counter("aegis.runs", "result", "started").increment();
-        return get(actor, workspaceId, runId);
+        return execution(actor, workspaceId, runId);
     }
 
     public void orchestrate(UUID runId) {
@@ -456,7 +456,7 @@ public class RunService {
             events.append(runId, "RUN_CANCELLED", "CANCELLED", Map.of());
             audit.record(workspaceId, actor.id(), "RUN_CANCELLED", "agent_run", runId.toString(), runId, Map.of());
         });
-        return get(actor, workspaceId, runId);
+        return execution(actor, workspaceId, runId);
     }
 
     public Map<String, Object> get(Actor actor, UUID workspaceId, UUID runId) {
@@ -464,15 +464,31 @@ public class RunService {
         return runView(runId);
     }
 
+    public Map<String, Object> execution(Actor actor, UUID workspaceId, UUID runId) {
+        ensureVisible(actor, workspaceId, runId);
+        var membership = actor.membership(workspaceId);
+        String role = membership.role();
+        Map<String, Object> run = executionRun(runId);
+        UUID ownerId = (UUID) run.get("userId");
+        String state = String.valueOf(run.get("state"));
+        boolean includeArguments = RunVisibility.includeProposalArguments(role);
+        var body = new LinkedHashMap<String, Object>();
+        body.put("run", run);
+        body.put("events", events(actor, workspaceId, runId));
+        body.put("proposal", proposalView(runId, includeArguments));
+        body.put("approval", approvalSummary(runId));
+        body.put("capabilities", Map.of(
+                "canCancel", RunVisibility.canCancel(role, actor.id(), ownerId, state),
+                "canReadApprovals", RunVisibility.canReadApprovals(role),
+                "includeProposalArguments", includeArguments
+        ));
+        return body;
+    }
+
     public Map<String, Object> list(Actor actor, UUID workspaceId, int page, int size) {
         int limit = Math.min(Math.max(size, 1), 100);
         int offset = Math.max(page, 0) * limit;
-        String role = actor.membership(workspaceId).role();
-        String filter = switch (role) {
-            case "OPERATOR" -> " and r.user_id = :user ";
-            case "REVIEWER" -> " and exists (select 1 from approvals a where a.run_id = r.id) ";
-            default -> " ";
-        };
+        String filter = visibilitySql(actor.membership(workspaceId).role());
         var params = new MapSqlParameterSource()
                 .addValue("workspace", workspaceId)
                 .addValue("user", actor.id())
@@ -723,25 +739,132 @@ public class RunService {
         }
     }
 
+    public static String visibilitySql(String role) {
+        return switch (role) {
+            case "OPERATOR" -> " and r.user_id = :user ";
+            case "REVIEWER" -> " and exists (select 1 from approvals vis where vis.run_id = r.id) ";
+            default -> " ";
+        };
+    }
+
     private void ensureVisible(Actor actor, UUID workspaceId, UUID runId) {
         var membership = actor.membership(workspaceId);
         if (membership == null) {
             throw new ApiException("FORBIDDEN", "You are not a member of that workspace.", 403);
         }
-        var rows = jdbc.query("select user_id, workspace_id from agent_runs where id = :id", Map.of("id", runId),
-                (rs, n) -> new UUID[]{UUID.fromString(rs.getString("user_id")), UUID.fromString(rs.getString("workspace_id"))});
-        if (rows.isEmpty() || !rows.get(0)[1].equals(workspaceId)) {
+        var rows = jdbc.query("""
+                select user_id, workspace_id,
+                       exists (select 1 from approvals vis where vis.run_id = agent_runs.id) as has_approval
+                from agent_runs where id = :id
+                """, Map.of("id", runId), (rs, n) -> new Object[]{
+                UUID.fromString(rs.getString("user_id")),
+                UUID.fromString(rs.getString("workspace_id")),
+                rs.getBoolean("has_approval")
+        });
+        if (rows.isEmpty()) {
             throw new ApiException("NOT_FOUND", "Run not found.", 404);
         }
-        if ("OPERATOR".equals(membership.role()) && !rows.get(0)[0].equals(actor.id())) {
-            throw new ApiException("FORBIDDEN", "Operators can only inspect their own runs.", 403);
-        }
-        if ("REVIEWER".equals(membership.role())) {
-            Long count = jdbc.queryForObject("select count(*) from approvals where run_id = :id", Map.of("id", runId), Long.class);
-            if (count == null || count == 0) {
-                throw new ApiException("FORBIDDEN", "Reviewers can inspect runs that have an approval.", 403);
+        RunVisibility.assertVisible(membership.role(), actor.id(), (UUID) rows.get(0)[0], workspaceId,
+                (UUID) rows.get(0)[1], (Boolean) rows.get(0)[2]);
+    }
+
+    private Map<String, Object> executionRun(UUID runId) {
+        return jdbc.queryForObject("""
+                select r.id, r.workspace_id, r.user_id, r.agent_id, r.agent_version_id, r.prompt_version_id, r.state,
+                       r.failure_category, r.error_code, r.error_message, r.question, r.draft_answer, r.final_response,
+                       r.citations::text as citations, r.input_tokens, r.output_tokens, r.estimated_cost_usd,
+                       r.provider, r.model, r.trace_id, r.request_id, r.started_at, r.ended_at, r.timeout_at, r.created_at,
+                       a.name as agent_name, av.version_number
+                from agent_runs r
+                join agents a on a.id = r.agent_id
+                join agent_versions av on av.id = r.agent_version_id
+                where r.id = :id
+                """, Map.of("id", runId), (rs, n) -> {
+            var row = new LinkedHashMap<String, Object>();
+            Instant created = rs.getTimestamp("created_at").toInstant();
+            Instant started = rs.getTimestamp("started_at") == null ? null : rs.getTimestamp("started_at").toInstant();
+            Instant ended = rs.getTimestamp("ended_at") == null ? null : rs.getTimestamp("ended_at").toInstant();
+            Instant timeout = rs.getTimestamp("timeout_at").toInstant();
+            Instant durationEnd = ended != null ? ended : Instant.now();
+            Instant durationStart = started != null ? started : created;
+            Long durationMs = durationEnd.isBefore(durationStart) ? null : java.time.Duration.between(durationStart, durationEnd).toMillis();
+            int input = rs.getInt("input_tokens");
+            int output = rs.getInt("output_tokens");
+            String model = rs.getString("model");
+            row.put("id", UUID.fromString(rs.getString("id")));
+            row.put("workspaceId", UUID.fromString(rs.getString("workspace_id")));
+            row.put("userId", UUID.fromString(rs.getString("user_id")));
+            row.put("agentId", UUID.fromString(rs.getString("agent_id")));
+            row.put("agentVersionId", UUID.fromString(rs.getString("agent_version_id")));
+            row.put("promptVersionId", UUID.fromString(rs.getString("prompt_version_id")));
+            row.put("agentName", rs.getString("agent_name"));
+            row.put("agentVersionNumber", rs.getInt("version_number"));
+            row.put("state", rs.getString("state"));
+            row.put("failureCategory", rs.getString("failure_category"));
+            row.put("errorCode", rs.getString("error_code"));
+            row.put("errorMessage", rs.getString("error_message"));
+            row.put("question", rs.getString("question"));
+            row.put("draftAnswer", rs.getString("draft_answer"));
+            row.put("finalResponse", rs.getString("final_response"));
+            row.put("citations", mapper.convertValue(readJson(rs.getString("citations"), List.of()), new TypeReference<List<Object>>() {}));
+            row.put("inputTokens", input);
+            row.put("outputTokens", output);
+            row.put("provider", rs.getString("provider"));
+            row.put("model", model);
+            row.put("traceId", rs.getString("trace_id"));
+            row.put("requestId", rs.getString("request_id"));
+            row.put("startedAt", started == null ? null : started.toString());
+            row.put("endedAt", ended == null ? null : ended.toString());
+            row.put("timeoutAt", timeout.toString());
+            row.put("createdAt", created.toString());
+            row.put("durationMs", durationMs);
+            row.put("cost", runCost(model, input, output, rs.getBigDecimal("estimated_cost_usd")));
+            return row;
+        });
+    }
+
+    private Map<String, Object> proposalView(UUID runId, boolean includeArguments) {
+        var rows = jdbc.query("""
+                select p.id, p.tool_name, t.classification, p.arguments::text as arguments, p.reason, p.risk_level,
+                       p.policy_decision, p.policy_code, p.policy_reason
+                from tool_proposals p
+                left join tools t on t.name = p.tool_name
+                where p.run_id = :id
+                order by p.sequence desc
+                limit 1
+                """, Map.of("id", runId), (rs, n) -> {
+            var row = new LinkedHashMap<String, Object>();
+            row.put("id", UUID.fromString(rs.getString("id")));
+            row.put("tool", rs.getString("tool_name"));
+            row.put("classification", rs.getString("classification"));
+            row.put("risk", rs.getString("risk_level"));
+            row.put("policyDecision", rs.getString("policy_decision"));
+            row.put("policyCode", rs.getString("policy_code"));
+            row.put("policyReason", rs.getString("policy_reason"));
+            if (includeArguments) {
+                row.put("arguments", Jsons.map(mapper, rs.getString("arguments")));
+                row.put("reason", rs.getString("reason"));
             }
-        }
+            return row;
+        });
+        return rows.isEmpty() ? null : rows.get(0);
+    }
+
+    private Map<String, Object> approvalSummary(UUID runId) {
+        var rows = jdbc.query("""
+                select id, status, required_role, expires_at
+                from approvals where run_id = :id
+                order by requested_at desc
+                limit 1
+                """, Map.of("id", runId), (rs, n) -> {
+            var row = new LinkedHashMap<String, Object>();
+            row.put("id", UUID.fromString(rs.getString("id")));
+            row.put("status", rs.getString("status"));
+            row.put("requiredRole", rs.getString("required_role"));
+            row.put("expiresAt", rs.getTimestamp("expires_at").toInstant().toString());
+            return row;
+        });
+        return rows.isEmpty() ? null : rows.get(0);
     }
 
     private Map<String, Object> runView(UUID runId) {
@@ -841,9 +964,41 @@ public class RunService {
         return rows.get(0);
     }
 
+    public static Map<String, Object> runCost(String model, int inputTokens, int outputTokens, BigDecimal stored) {
+        int tokens = inputTokens + outputTokens;
+        var body = new LinkedHashMap<String, Object>();
+        body.put("tokens", tokens);
+        if (tokens <= 0) {
+            body.put("pricingStatus", "NO_TOKENS");
+            body.put("amount", null);
+            return body;
+        }
+        if (isZeroPricedModel(model)) {
+            body.put("pricingStatus", "CONFIGURED_ZERO");
+            body.put("amount", BigDecimal.ZERO);
+            return body;
+        }
+        if (isListPricedModel(model)) {
+            body.put("pricingStatus", "PRICED");
+            body.put("amount", stored);
+            return body;
+        }
+        body.put("pricingStatus", "PRICING_UNAVAILABLE");
+        body.put("amount", null);
+        return body;
+    }
+
+    public static boolean isZeroPricedModel(String model) {
+        return "grounded-extractive-v1".equals(model);
+    }
+
+    public static boolean isListPricedModel(String model) {
+        return "gpt-4o-mini".equals(model);
+    }
+
     static BigDecimal estimateCost(String model, int inputTokens, int outputTokens) {
-        double inputRate = "gpt-4o-mini".equals(model) ? 0.15d : 0d;
-        double outputRate = "gpt-4o-mini".equals(model) ? 0.60d : 0d;
+        double inputRate = isListPricedModel(model) ? 0.15d : 0d;
+        double outputRate = isListPricedModel(model) ? 0.60d : 0d;
         return BigDecimal.valueOf((inputTokens * inputRate + outputTokens * outputRate) / 1_000_000d);
     }
 
@@ -889,6 +1044,12 @@ class RunController {
     Map<String, Object> get(HttpServletRequest request, @PathVariable UUID id) {
         var membership = rbac.require(request, "OPERATOR", "DEVELOPER", "REVIEWER", "ADMIN");
         return runs.get(rbac.current(), membership.workspaceId(), id);
+    }
+
+    @GetMapping("/runs/{id}/execution")
+    Map<String, Object> execution(HttpServletRequest request, @PathVariable UUID id) {
+        var membership = rbac.require(request, "OPERATOR", "DEVELOPER", "REVIEWER", "ADMIN");
+        return runs.execution(rbac.current(), membership.workspaceId(), id);
     }
 
     @GetMapping("/runs/{id}/timeline")

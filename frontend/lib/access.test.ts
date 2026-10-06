@@ -1,0 +1,35 @@
+import assert from "node:assert/strict";
+import { activeItem, canAccess, commandsFor, decideRoute, environmentLabel, visibleNav } from "./access.ts";
+
+const labels = (role: string) => visibleNav(role).map((item) => item.label);
+
+assert.deepEqual(labels("OPERATOR"), ["Overview", "Support run", "Agents", "Knowledge", "Observability"]);
+assert.deepEqual(labels("REVIEWER"), ["Overview", "Approvals", "Agents", "Observability"]);
+assert.deepEqual(labels("DEVELOPER"), ["Overview", "Agents", "Knowledge", "Evaluation", "Observability", "Audit", "Administration"]);
+assert.equal(visibleNav("ADMIN").length, 9);
+assert.equal(canAccess("OPERATOR", "audit.read"), false);
+assert.equal(canAccess("OPERATOR", "admin.console"), false);
+assert.equal(canAccess("REVIEWER", "approvals.read"), true);
+assert.equal(canAccess("DEVELOPER", "runs.create"), false);
+assert.equal(canAccess("GUEST", "overview.read"), false);
+
+assert.equal(decideRoute("OPERATOR", "/audit").kind, "forbidden");
+assert.equal(decideRoute("OPERATOR", "/admin").kind, "forbidden");
+assert.equal(decideRoute("DEVELOPER", "/runs/new").kind, "forbidden");
+assert.equal(decideRoute("REVIEWER", "/evaluations").kind, "forbidden");
+assert.equal(decideRoute("DEVELOPER", "/agents").kind, "allow");
+assert.equal(decideRoute("ADMIN", "/approvals").kind, "allow");
+assert.equal(decideRoute("OPERATOR", "/runs/abc").kind, "allow");
+assert.equal(decideRoute("OPERATOR", "/missing").kind, "unknown");
+
+assert.equal(commandsFor("OPERATOR", "audit").length, 0);
+assert.equal(commandsFor("OPERATOR", "support")[0]?.href, "/runs/new");
+assert.equal(commandsFor("ADMIN", "audit")[0]?.href, "/audit");
+assert.equal(activeItem("ADMIN", "/runs/abc")?.href, "/runs/new");
+assert.equal(activeItem("OPERATOR", "/")?.href, "/");
+assert.equal(commandsFor("OPERATOR", "refresh")[0]?.href, "/");
+assert.equal(environmentLabel("dev"), "LOCAL");
+assert.equal(environmentLabel("production"), "PRODUCTION");
+assert.notEqual(environmentLabel("dev"), "PRODUCTION");
+
+console.log("access tests passed");

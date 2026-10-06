@@ -3,29 +3,46 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { api } from "../../../lib/api";
+import { Card } from "../../../components/ui/Card";
+import { Page, PageHeader } from "../../../components/ui/PageHeader";
+import { StatusBadge } from "../../../components/ui/StatusBadge";
+import { EmptyState, ErrorState, Skeleton } from "../../../components/ui/States";
+import { CodeBlock, Mono } from "../../../components/ui/Type";
 
 type Evaluation = { id: string; runId: string; model: string; evaluatorVersion: string; datasetVersion: string; passed: boolean; scores: Record<string, number> };
 
 export default function EvaluationsPage() {
   const [rows, setRows] = useState<Evaluation[]>([]);
   const [error, setError] = useState("");
-  useEffect(() => { api<Evaluation[]>("/api/v1/evaluations").then(setRows).catch((err) => setError(err.message)); }, []);
+  const [ready, setReady] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => {
+    let stop = false;
+    api<Evaluation[]>("/api/v1/evaluations").then((items) => { if (!stop) setRows(items); }).catch((err) => { if (!stop) setError(err.message); }).finally(() => { if (!stop) setReady(true); });
+    return () => { stop = true; };
+  }, [attempt]);
   return (
-    <div>
-      <p className="kicker">Heuristic evaluator v1</p>
-      <h1 className="text-2xl font-semibold">Evaluation</h1>
-      <p className="mt-2 max-w-2xl text-sm text-mist">Scores check that citations are substrings of retrieved chunks, that a ticket has an approval, and that a run did not create two tickets. They are not a human labeling study.</p>
-      {error && <p className="mt-3 text-rose">{error}</p>}
-      <div className="mt-4 space-y-3">
-        {rows.length === 0 && <p className="text-sm text-mist">No evaluations yet.</p>}
+    <Page width="wide">
+      <PageHeader
+        eyebrow="Heuristic evaluator v1"
+        title="Evaluation"
+        description="Scores check that citations are substrings of retrieved chunks, that a ticket has an approval, and that a run did not create two tickets. They are not a human labeling study."
+      />
+      {error && <ErrorState title="Unable to load evaluations" onRetry={() => setAttempt((value) => value + 1)}>{error}</ErrorState>}
+      {!error && !ready && <Skeleton className="h-24" />}
+      {!error && ready && rows.length === 0 && <EmptyState title="No evaluations yet">A finished run records one heuristic-v1 result. That result is a check, not a benchmark score.</EmptyState>}
+      <div className="space-y-3">
         {rows.map((row) => (
-          <article key={row.id} className="panel p-4 text-sm">
-            <div className="flex justify-between"><Link className="text-sky" href={`/runs/${row.runId}`}>{row.runId}</Link><span className={row.passed ? "text-moss" : "text-rose"}>{row.passed ? "passed" : "failed"}</span></div>
-            <p className="mt-1 text-mist">{row.model} · {row.datasetVersion} · {row.evaluatorVersion}</p>
-            <pre className="mt-2 overflow-auto text-xs">{JSON.stringify(row.scores, null, 2)}</pre>
-          </article>
+          <Card key={row.id}>
+            <div className="flex items-center justify-between gap-3">
+              <Link className="text-info hover:underline" href={`/runs/${row.runId}`}><Mono>{row.runId}</Mono></Link>
+              <StatusBadge status={row.passed ? "COMPLETED" : "FAILED"} label={row.passed ? "passed" : "failed"} />
+            </div>
+            <p className="mt-2"><Mono>{row.model} · {row.datasetVersion} · {row.evaluatorVersion}</Mono></p>
+            <div className="mt-2"><CodeBlock value={JSON.stringify(row.scores, null, 2)} /></div>
+          </Card>
         ))}
       </div>
-    </div>
+    </Page>
   );
 }

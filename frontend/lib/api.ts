@@ -18,8 +18,8 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   return data as T;
 }
 
-export type Membership = { workspaceId: string; role: string };
-export type Me = { id: string; email: string; displayName: string; memberships: Membership[] };
+export type Membership = { workspaceId: string; role: string; workspaceName?: string };
+export type Me = { id: string; email: string; displayName: string; environment?: string; memberships: Membership[] };
 
 export function roleOf(me: Me | null): string {
   return me?.memberships[0]?.role || "";

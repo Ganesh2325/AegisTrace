@@ -2,6 +2,11 @@
 
 import { useEffect, useState } from "react";
 import { api } from "../../../lib/api";
+import { DataTable } from "../../../components/ui/DataTable";
+import { Page, PageHeader } from "../../../components/ui/PageHeader";
+import { StatusBadge } from "../../../components/ui/StatusBadge";
+import { EmptyState, ErrorState, Skeleton } from "../../../components/ui/States";
+import { Mono } from "../../../components/ui/Type";
 
 type Base = { id: string; name: string; slug: string; embeddingModel: string; status: string };
 type Doc = { id: string; title: string; status: string; chunks: number; errorMessage?: string };
@@ -10,36 +15,43 @@ export default function KnowledgePage() {
   const [bases, setBases] = useState<Base[]>([]);
   const [docs, setDocs] = useState<Doc[]>([]);
   const [error, setError] = useState("");
+  const [ready, setReady] = useState(false);
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
+    let stop = false;
     api<Base[]>("/api/v1/knowledge-bases").then(async (rows) => {
+      if (stop) return;
       setBases(rows);
       if (rows[0]) setDocs(await api<Doc[]>(`/api/v1/knowledge-bases/${rows[0].id}/documents`));
-    }).catch((err) => setError(err.message));
-  }, []);
+    }).catch((err) => { if (!stop) setError(err.message); }).finally(() => { if (!stop) setReady(true); });
+    return () => { stop = true; };
+  }, [attempt]);
 
   return (
-    <div>
-      <p className="kicker">Corpus</p>
-      <h1 className="text-2xl font-semibold">Knowledge</h1>
-      <p className="mt-2 max-w-2xl text-sm text-mist">Documents are data. A document that tells the agent to ignore policy does not change approval.</p>
-      {error && <p className="mt-3 text-rose">{error}</p>}
+    <Page width="wide">
+      <PageHeader eyebrow="Corpus" title="Knowledge" description="Documents are data. A document that tells the agent to ignore policy does not change approval." />
+      {error && <ErrorState title="Unable to load knowledge" onRetry={() => setAttempt((value) => value + 1)}>{error}</ErrorState>}
       {bases.map((base) => (
-        <p key={base.id} className="mt-4 text-sm">{base.name} · {base.embeddingModel} · {base.status}</p>
+        <div key={base.id} className="flex flex-wrap items-center gap-2 text-sm">
+          <span>{base.name}</span>
+          <Mono>{base.embeddingModel}</Mono>
+          <StatusBadge status={base.status} />
+        </div>
       ))}
-      <table className="mt-4 w-full text-left text-sm">
-        <thead className="text-mist"><tr><th className="py-2">Title</th><th>Status</th><th>Chunks</th></tr></thead>
-        <tbody>
-          {docs.map((doc) => (
-            <tr key={doc.id} className="border-t border-line">
-              <td className="py-2">{doc.title}</td>
-              <td>{doc.status}</td>
-              <td>{doc.chunks}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      {docs.length === 0 && <p className="mt-4 text-sm text-mist">No documents yet. The worker seeds the synthetic corpus after startup.</p>}
-    </div>
+      {!error && !ready && <Skeleton className="h-24" />}
+      {!error && ready && (
+        <DataTable
+          rows={docs}
+          getKey={(doc) => doc.id}
+          empty={<EmptyState title="No documents yet">The worker seeds the synthetic corpus after startup.</EmptyState>}
+          columns={[
+            { key: "title", header: "Title", cell: (doc) => doc.title },
+            { key: "status", header: "Status", cell: (doc) => <StatusBadge status={doc.status} /> },
+            { key: "chunks", header: "Chunks", cell: (doc) => doc.chunks },
+          ]}
+        />
+      )}
+    </Page>
   );
 }

@@ -121,10 +121,11 @@ public class JobMaintenance {
 
     private double queueDepth() {
         try {
-            Long depth = jdbc.queryForObject("select count(*) from jobs where status in ('PENDING','RETRY','RUNNING')", Map.of(), Long.class);
+            Long depth = jdbc.queryForObject(
+                    "select count(*) from jobs where status in ('PENDING','RETRY','RUNNING')", Map.of(), Long.class);
             return depth == null ? 0 : depth;
         } catch (Exception ex) {
-            return 0;
+            return Double.NaN;
         }
     }
 }
