@@ -270,7 +270,8 @@ public class ObservabilityService {
         body.put("telemetry", Map.of(
                 "status", fetch.status(),
                 "message", fetch.message() == null ? "" : fetch.message(),
-                "spanCount", fetch.spans().size()));
+                "spanCount", fetch.spans().size(),
+                "jaegerHttpMs", fetch.httpDurationMs()));
         body.put("spans", fetch.spans());
         body.put("jaegerUrl", TelemetryPrivacy.jaegerTraceUrl(properties.getJaegerPublicUrl(), traceId));
         body.put("grafanaUrl", grafanaUrl());

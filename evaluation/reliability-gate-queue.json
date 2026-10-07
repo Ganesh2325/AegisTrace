@@ -1,0 +1,13 @@
+{
+  "measuredAt": "2026-10-07T19:39:31Z",
+  "method": "20 sequential durable SIMULATE jobs with one healthy worker and queue depth below 20; a temporary trigger captured the exact PENDING-to-RUNNING timestamp and was removed after measurement.",
+  "queuePickup": {
+    "samples": 20,
+    "p50Ms": 418.21,
+    "p95Ms": 533.36,
+    "p99Ms": 543.91,
+    "meanMs": 384.39
+  },
+  "minMs": 114.61,
+  "maxMs": 546.55
+}

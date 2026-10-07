@@ -104,6 +104,16 @@ def summarize(samples: list[tuple[int, bytes, float]]) -> dict:
     }
 
 
+def summarize_latencies(latencies: list[float]) -> dict:
+    return {
+        "samples": len(latencies),
+        "p50Ms": round(percentile(latencies, 0.50), 2),
+        "p95Ms": round(percentile(latencies, 0.95), 2),
+        "p99Ms": round(percentile(latencies, 0.99), 2),
+        "meanMs": round(statistics.fmean(latencies), 2) if latencies else 0.0,
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--base-url", default="http://localhost:8080")
@@ -187,6 +197,23 @@ def main() -> None:
             "firstRequestMs": round(first[2], 2),
             **summarize(warm),
         }
+        if name == "trace_detail":
+            jaeger_ms: list[float] = []
+            total_ms: list[float] = []
+            for status, payload, elapsed_ms in warm:
+                if status >= 400:
+                    continue
+                parsed = json.loads(payload or b"{}")
+                dependency_ms = float((parsed.get("telemetry") or {}).get("jaegerHttpMs", 0))
+                jaeger_ms.append(dependency_ms)
+                total_ms.append(elapsed_ms)
+            application_ms = [max(0.0, total - dependency) for total, dependency in zip(total_ms, jaeger_ms)]
+            report["traceDetailDecomposition"] = {
+                "method": "Paired samples. Jaeger is timed inside JaegerClient from HTTP dispatch through response JSON decoding; applicationApi is total authenticated endpoint latency minus that measured dependency interval.",
+                "applicationApi": summarize_latencies(application_ms),
+                "jaegerDependency": summarize_latencies(jaeger_ms),
+                "total": summarize_latencies(total_ms),
+            }
 
     burst_path = ENDPOINTS["operations_overview"]
     burst_started = time.perf_counter()

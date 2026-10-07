@@ -1,0 +1,35 @@
+{
+  "measuredAt": "2026-10-07T20:20:22Z",
+  "method": "10 sequential warm authenticated evaluation starts against the existing 17-case suite, one healthy worker, and queue depth below 20. Each probe was cancelled immediately after acceptance to bound downstream work.",
+  "acceptance": {
+    "samples": 10,
+    "p50Ms": 67.5,
+    "p95Ms": 381.27,
+    "p99Ms": 562.25,
+    "meanMs": 122.6
+  },
+  "minMs": 53.07,
+  "maxMs": 607.49,
+  "statuses": {
+    "202": 10
+  },
+  "executionIds": [
+    "1610e0c1-bf24-46a7-9933-6eda1e0c5237",
+    "3ee1680c-7dfb-4193-b96b-caff9d2203af",
+    "7e0b89dc-4206-4409-9111-9c5b61b49892",
+    "ceab4312-ea92-4903-96fa-14efe1614d07",
+    "34b92d32-d317-4ca1-a61d-ea44f21930bd",
+    "0fb52141-6c63-424d-a848-85cb23785cd4",
+    "c19e4476-eecd-446d-8de9-f16ee8cf986b",
+    "aa03360d-ec5b-4fe8-8eb5-7068a8f7c425",
+    "860a0948-80c6-4305-b34f-33aaf26de47b",
+    "f1b9628b-fb52-44bb-984c-16ceedad09b5"
+  ],
+  "dispatchProbe": {
+    "acceptanceMs": 1826.44,
+    "dispatchObservedMs": 3366.51,
+    "observedState": "RUNNING",
+    "executionId": "279c2852-217f-4ee1-a8f6-c5c5151d3f7d",
+    "note": "Separate earlier warm dispatch observation retained for dispatch timing; it was not included in the final 10-sample acceptance distribution."
+  }
+}

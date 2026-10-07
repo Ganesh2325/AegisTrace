@@ -19,59 +19,58 @@ import java.util.Map;
 @Component
 public class JaegerClient {
     private static final Logger log = LoggerFactory.getLogger(JaegerClient.class);
-    private final AppProperties properties;
+    private final RestClient traceClient;
+    private final RestClient jaegerStatusClient;
+    private final RestClient prometheusStatusClient;
 
     public JaegerClient(AppProperties properties) {
-        this.properties = properties;
+        this.traceClient = client(properties.getJaegerQueryUrl(), Duration.ofSeconds(2), Duration.ofSeconds(3));
+        this.jaegerStatusClient = client(properties.getJaegerQueryUrl(), Duration.ofSeconds(1), Duration.ofSeconds(2));
+        this.prometheusStatusClient = client(properties.getPrometheusUrl(), Duration.ofSeconds(1), Duration.ofSeconds(1));
     }
 
     public TraceFetch fetch(String traceId) {
-        String query = properties.getJaegerQueryUrl();
-        if (query == null || query.isBlank()) {
+        if (traceClient == null) {
             return TraceFetch.notConfigured();
         }
         if (!TelemetryPrivacy.safeTraceId(TelemetryPrivacy.hexTraceId(traceId))) {
-            return TraceFetch.unavailable("Trace ID is not a Jaeger hex identifier.");
+            return TraceFetch.unavailable("Trace ID is not a Jaeger hex identifier.", 0);
         }
-        var factory = new SimpleClientHttpRequestFactory();
-        factory.setConnectTimeout(Duration.ofSeconds(2));
-        factory.setReadTimeout(Duration.ofSeconds(3));
-        String base = query.endsWith("/") ? query.substring(0, query.length() - 1) : query.trim();
-        RestClient client = RestClient.builder().baseUrl(base).requestFactory(factory).build();
+        long requestStarted = System.nanoTime();
         try {
-            JsonNode body = client.get()
+            JsonNode body = traceClient.get()
                     .uri("/api/traces/{id}", TelemetryPrivacy.hexTraceId(traceId))
                     .retrieve()
                     .body(JsonNode.class);
+            double httpDurationMs = elapsedMs(requestStarted);
             List<Map<String, Object>> spans = parse(body);
             if (spans.isEmpty()) {
-                return TraceFetch.empty();
+                return TraceFetch.empty(httpDurationMs);
             }
-            return TraceFetch.ok(spans);
+            return TraceFetch.ok(spans, httpDurationMs);
         } catch (org.springframework.web.client.RestClientResponseException ex) {
+            double httpDurationMs = elapsedMs(requestStarted);
             if (ex.getStatusCode().value() == 404) {
-                return TraceFetch.empty();
+                return TraceFetch.empty(httpDurationMs);
             }
             log.warn("jaeger_unavailable error_type={}", ex.getClass().getSimpleName());
-            return TraceFetch.unavailable("The trace backend did not respond.");
+            return TraceFetch.unavailable("The trace backend did not respond.", httpDurationMs);
         } catch (RestClientException ex) {
             log.warn("jaeger_unavailable error_type={}", ex.getClass().getSimpleName());
-            return TraceFetch.unavailable("The trace backend did not respond.");
+            return TraceFetch.unavailable("The trace backend did not respond.", elapsedMs(requestStarted));
         }
     }
 
+    private static double elapsedMs(long started) {
+        return Math.round((System.nanoTime() - started) / 10_000.0) / 100.0;
+    }
+
     public String tracesBackendStatus() {
-        String query = properties.getJaegerQueryUrl();
-        if (query == null || query.isBlank()) {
+        if (jaegerStatusClient == null) {
             return "NOT_CONFIGURED";
         }
-        var factory = new SimpleClientHttpRequestFactory();
-        factory.setConnectTimeout(Duration.ofSeconds(1));
-        factory.setReadTimeout(Duration.ofSeconds(2));
-        String base = query.endsWith("/") ? query.substring(0, query.length() - 1) : query.trim();
-        RestClient client = RestClient.builder().baseUrl(base).requestFactory(factory).build();
         try {
-            client.get().uri("/api/services").retrieve().toBodilessEntity();
+            jaegerStatusClient.get().uri("/api/services").retrieve().toBodilessEntity();
             return "OK";
         } catch (RestClientException ex) {
             log.warn("jaeger_unavailable error_type={}", ex.getClass().getSimpleName());
@@ -80,22 +79,27 @@ public class JaegerClient {
     }
 
     public String prometheusStatus() {
-        String url = properties.getPrometheusUrl();
-        if (url == null || url.isBlank()) {
+        if (prometheusStatusClient == null) {
             return "NOT_CONFIGURED";
         }
-        var factory = new SimpleClientHttpRequestFactory();
-        factory.setConnectTimeout(Duration.ofSeconds(1));
-        factory.setReadTimeout(Duration.ofSeconds(1));
-        String base = url.endsWith("/") ? url.substring(0, url.length() - 1) : url.trim();
-        RestClient client = RestClient.builder().baseUrl(base).requestFactory(factory).build();
         try {
-            client.get().uri("/-/ready").retrieve().toBodilessEntity();
+            prometheusStatusClient.get().uri("/-/ready").retrieve().toBodilessEntity();
             return "OK";
         } catch (RestClientException ex) {
             log.warn("prometheus_unavailable error_type={}", ex.getClass().getSimpleName());
             return "UNAVAILABLE";
         }
+    }
+
+    private static RestClient client(String url, Duration connectTimeout, Duration readTimeout) {
+        if (url == null || url.isBlank()) {
+            return null;
+        }
+        var factory = new SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout(connectTimeout);
+        factory.setReadTimeout(readTimeout);
+        String base = url.endsWith("/") ? url.substring(0, url.length() - 1) : url.trim();
+        return RestClient.builder().baseUrl(base).requestFactory(factory).build();
     }
 
     static String parentSpanId(JsonNode span) {
@@ -171,21 +175,21 @@ public class JaegerClient {
         return spans;
     }
 
-    public record TraceFetch(String status, String message, List<Map<String, Object>> spans) {
-        static TraceFetch ok(List<Map<String, Object>> spans) {
-            return new TraceFetch("OK", null, spans);
+    public record TraceFetch(String status, String message, List<Map<String, Object>> spans, double httpDurationMs) {
+        static TraceFetch ok(List<Map<String, Object>> spans, double httpDurationMs) {
+            return new TraceFetch("OK", null, spans, httpDurationMs);
         }
 
-        static TraceFetch empty() {
-            return new TraceFetch("EMPTY", "No spans were stored for this identifier.", List.of());
+        static TraceFetch empty(double httpDurationMs) {
+            return new TraceFetch("EMPTY", "No spans were stored for this identifier.", List.of(), httpDurationMs);
         }
 
-        static TraceFetch unavailable(String message) {
-            return new TraceFetch("UNAVAILABLE", message, List.of());
+        static TraceFetch unavailable(String message, double httpDurationMs) {
+            return new TraceFetch("UNAVAILABLE", message, List.of(), httpDurationMs);
         }
 
         static TraceFetch notConfigured() {
-            return new TraceFetch("NOT_CONFIGURED", "Jaeger query URL is not configured.", List.of());
+            return new TraceFetch("NOT_CONFIGURED", "Jaeger query URL is not configured.", List.of(), 0);
         }
     }
 }

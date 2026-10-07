@@ -1,0 +1,36 @@
+{
+  "measuredAt": "2026-10-07T20:05:40Z",
+  "traceId": "31e6b25e79c5b9e3f4e1743bb8da5736",
+  "method": "50 paired authenticated requests against a representative stored trace. The source trace has 231 Jaeger spans; the API applied its documented 200-span cap. Jaeger is timed internally from HTTP dispatch through response JSON decoding; applicationApi is paired total minus that interval.",
+  "firstRequestMs": 1181.97,
+  "spanCount": {
+    "min": 200,
+    "max": 200
+  },
+  "responseBytes": {
+    "min": 101964,
+    "max": 104142
+  },
+  "applicationApi": {
+    "samples": 50,
+    "p50Ms": 117.1,
+    "p95Ms": 238.35,
+    "p99Ms": 794.63,
+    "meanMs": 155.26
+  },
+  "jaegerDependency": {
+    "samples": 50,
+    "p50Ms": 61.76,
+    "p95Ms": 201.19,
+    "p99Ms": 399.45,
+    "meanMs": 84.09
+  },
+  "total": {
+    "samples": 50,
+    "p50Ms": 193.09,
+    "p95Ms": 472.96,
+    "p99Ms": 1052.14,
+    "meanMs": 239.35
+  },
+  "errors": 0
+}

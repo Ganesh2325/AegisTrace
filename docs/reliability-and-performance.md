@@ -125,13 +125,37 @@ Measured authenticated API results with 20 warm samples per endpoint:
 - Approval list/detail: p95 301.61/103.52 ms, 13,912/4,017 bytes.
 - Knowledge base/documents: p95 198.12/156.94 ms, 300/3,353 bytes.
 - Observability overview: p95 301.68 ms, 8,808 bytes.
-- Trace list/detail: p95 173.50/768.04 ms, 7,411/77,748 bytes. Trace detail includes bounded Jaeger dependency time.
+- Trace list: p95 173.50 ms, 7,411 bytes. The original combined trace-detail p95 of 768.04 ms included Jaeger and did not prove the application-only detail contract; the corrected decomposition is recorded below.
 - Audit list/detail: p95 191.25/193.08 ms, 12,197/535 bytes.
 - Evaluation overview/history/detail: p95 98.62/79.55/536.31 ms, 3,746/2,511/12,600 bytes.
 - Safety overview: p95 95.60 ms, 7,833 bytes.
 - Support-run creation: 895.03 ms first acceptance; identical request-key replay returned the same run in 95.98 ms.
 - Operations burst: 100 requests at concurrency 10, 14.99 requests/second, p50 623.31 ms, p95 1,071.30 ms, p99 1,232.01 ms, 0 errors and 0 timeouts.
 - Audit soak: 60.31 seconds, 1,308 requests at concurrency 4, 21.69 requests/second, p50 155.68 ms, p95 399.64 ms, p99 600.58 ms, 0 errors and 0 timeouts.
+
+### Trace-detail performance gate correction
+
+The trace-detail endpoint now reports `telemetry.jaegerHttpMs`, measured inside `JaegerClient` from HTTP dispatch through Jaeger response JSON decoding. The benchmark uses paired samples: application/API latency is the same request's total authenticated endpoint latency minus its measured Jaeger interval. Jaeger clients are constructed once and reused; the first representative measurement demonstrated that rebuilding a client per request was avoidable application overhead.
+
+The final gate used 50 warm requests against a stored 231-span trace. The existing API cap returned 200 spans and 101,964–104,142 response bytes:
+
+- Application/API portion: p50 117.10 ms, p95 238.35 ms, p99 794.63 ms.
+- Jaeger HTTP dependency: p50 61.76 ms, p95 201.19 ms, p99 399.45 ms.
+- Total user-visible endpoint: p50 193.09 ms, p95 472.96 ms, p99 1,052.14 ms.
+- Errors: 0.
+
+The declared detail contract is satisfied because the paired application/API p95 is 238.35 ms, below 600 ms. Jaeger latency remains visible and is not removed or reclassified.
+
+The post-change 20-sample regression baseline measured operations aggregate p95 189.11 ms, run list p95 71.22 ms, approval list p95 124.08 ms, audit list p95 173.51 ms, evaluation history p95 61.90 ms, evaluation detail p95 50.65 ms, support-run detail p95 74.02 ms, approval detail p95 86.49 ms, and audit detail p95 76.37 ms. A 50-request operations burst and 15.07-second audit soak completed with zero errors and zero timeouts.
+
+Additional contract probes used the same local architecture:
+
+- Run acceptance: 811.06 ms; same-key replay: 113.63 ms.
+- Evaluation acceptance over 10 sequential warm starts: p50 67.50 ms, p95 381.27 ms, p99 562.25 ms, maximum 607.49 ms; all returned HTTP 202. Each was cancelled immediately after acceptance to bound downstream work. A separate warm dispatch probe reached `RUNNING` in 3,366.51 ms.
+- Retrieval: 50 warm requests, p50 218.26 ms, p95 401.13 ms, p99 486.42 ms, zero errors and timeouts.
+- Worker queue pickup: 20 sequential durable jobs with one healthy worker and queue depth below 20; p50 418.21 ms, p95 533.36 ms, p99 543.91 ms. A temporary trigger captured the exact `PENDING` to `RUNNING` timestamp and was removed after measurement.
+
+Cold starts are not mixed into warm percentiles. The earlier first Observability request measured 4,979.32 ms after local JVM, connection-pool, and telemetry dependency initialization. In the final already-warmed regression run its first request was 109.37 ms and its warm p95 was 267.76 ms. The approximately five-second value is retained as local cold-start evidence, not treated as steady-state p95.
 
 ## Recovery and known limits
 
@@ -191,6 +215,9 @@ Captured evidence:
 - `npm run build` — production build passed; 20 static pages generated.
 - `docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U aegis -d aegistrace -f /tmp/reliability_scale.sql` — representative fixture and all four `EXPLAIN (ANALYZE, BUFFERS)` statements passed, then rolled back.
 - `python scripts/reliability_benchmark.py --samples 20 --burst 100 --concurrency 10 --soak-seconds 60 --include-run-start --output evaluation/reliability-benchmark.json` — 100-request burst and 60.31-second soak completed with zero errors and zero timeouts.
+- `python scripts/reliability_benchmark.py --samples 20 --burst 50 --concurrency 5 --soak-seconds 15 --output evaluation/reliability-gate-smoke.json` — final post-change regression baseline, 50-request burst, and 15.07-second soak passed with zero errors and zero timeouts.
+- Representative 200-span trace gate, 50 paired authenticated requests — application/API p95 238.35 ms, Jaeger p95 201.19 ms, total p95 472.96 ms, zero errors.
+- `mvn -B -f control-plane/pom.xml "-Dtest=JaegerClientTest,ObservabilityAccessTest" test` in the documented Maven container — 7 tests, 0 failures, 0 errors, 0 skipped.
 - `git diff --check` — passed after final documentation and evidence updates.
 
 The resource probe sampled the three request-processing containers before and after another 50-request burst plus 15-second soak. Control-plane memory moved from 513.1 MiB to 575.5 MiB and PIDs from 62 to 63 as the JVM warmed; runtime stayed at 56.93 MiB and 3 PIDs; worker moved from 43.64 MiB to 43.89 MiB and stayed at 3 PIDs. This short local probe found no Python process/thread growth, but it is not a production-duration heap-leak proof.

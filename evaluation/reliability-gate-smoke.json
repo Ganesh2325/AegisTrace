@@ -1,0 +1,355 @@
+{
+  "measuredAt": "2026-10-07T20:06:14Z",
+  "baseUrl": "http://localhost:8080",
+  "method": "Local Docker Compose, authenticated HTTP, sequential endpoint baseline plus bounded concurrent burst and soak.",
+  "baseline": {
+    "operations_overview": {
+      "firstRequestMs": 314.32,
+      "requests": 20,
+      "throughputRps": 8.02,
+      "p50Ms": 104.15,
+      "p95Ms": 189.11,
+      "p99Ms": 412.31,
+      "meanMs": 124.66,
+      "errorRate": 0.0,
+      "timeoutRate": 0.0,
+      "responseBytes": {
+        "min": 26033,
+        "max": 26033
+      },
+      "statuses": {
+        "200": 20
+      }
+    },
+    "support_run_list": {
+      "firstRequestMs": 46.94,
+      "requests": 20,
+      "throughputRps": 20.9,
+      "p50Ms": 45.2,
+      "p95Ms": 71.22,
+      "p99Ms": 77.5,
+      "meanMs": 47.85,
+      "errorRate": 0.0,
+      "timeoutRate": 0.0,
+      "responseBytes": {
+        "min": 4913,
+        "max": 4913
+      },
+      "statuses": {
+        "200": 20
+      }
+    },
+    "approval_list": {
+      "firstRequestMs": 60.2,
+      "requests": 20,
+      "throughputRps": 14.9,
+      "p50Ms": 59.88,
+      "p95Ms": 124.08,
+      "p99Ms": 135.95,
+      "meanMs": 67.09,
+      "errorRate": 0.0,
+      "timeoutRate": 0.0,
+      "responseBytes": {
+        "min": 15546,
+        "max": 15546
+      },
+      "statuses": {
+        "200": 20
+      }
+    },
+    "knowledge_list": {
+      "firstRequestMs": 63.57,
+      "requests": 20,
+      "throughputRps": 11.0,
+      "p50Ms": 75.43,
+      "p95Ms": 152.15,
+      "p99Ms": 171.29,
+      "meanMs": 90.91,
+      "errorRate": 0.0,
+      "timeoutRate": 0.0,
+      "responseBytes": {
+        "min": 300,
+        "max": 300
+      },
+      "statuses": {
+        "200": 20
+      }
+    },
+    "observability_overview": {
+      "firstRequestMs": 109.37,
+      "requests": 20,
+      "throughputRps": 8.11,
+      "p50Ms": 83.86,
+      "p95Ms": 267.76,
+      "p99Ms": 322.75,
+      "meanMs": 123.32,
+      "errorRate": 0.0,
+      "timeoutRate": 0.0,
+      "responseBytes": {
+        "min": 8821,
+        "max": 8821
+      },
+      "statuses": {
+        "200": 20
+      }
+    },
+    "trace_list": {
+      "firstRequestMs": 119.61,
+      "requests": 20,
+      "throughputRps": 7.39,
+      "p50Ms": 122.77,
+      "p95Ms": 193.58,
+      "p99Ms": 226.31,
+      "meanMs": 135.38,
+      "errorRate": 0.0,
+      "timeoutRate": 0.0,
+      "responseBytes": {
+        "min": 7390,
+        "max": 7390
+      },
+      "statuses": {
+        "200": 20
+      }
+    },
+    "audit_list": {
+      "firstRequestMs": 107.34,
+      "requests": 20,
+      "throughputRps": 10.44,
+      "p50Ms": 67.88,
+      "p95Ms": 173.51,
+      "p99Ms": 231.76,
+      "meanMs": 95.82,
+      "errorRate": 0.0,
+      "timeoutRate": 0.0,
+      "responseBytes": {
+        "min": 12254,
+        "max": 12254
+      },
+      "statuses": {
+        "200": 20
+      }
+    },
+    "evaluation_overview": {
+      "firstRequestMs": 133.68,
+      "requests": 20,
+      "throughputRps": 13.98,
+      "p50Ms": 61.42,
+      "p95Ms": 138.34,
+      "p99Ms": 149.3,
+      "meanMs": 71.53,
+      "errorRate": 0.0,
+      "timeoutRate": 0.0,
+      "responseBytes": {
+        "min": 6668,
+        "max": 6668
+      },
+      "statuses": {
+        "200": 20
+      }
+    },
+    "evaluation_history": {
+      "firstRequestMs": 52.25,
+      "requests": 20,
+      "throughputRps": 21.89,
+      "p50Ms": 44.6,
+      "p95Ms": 61.9,
+      "p99Ms": 62.03,
+      "meanMs": 45.67,
+      "errorRate": 0.0,
+      "timeoutRate": 0.0,
+      "responseBytes": {
+        "min": 5457,
+        "max": 5457
+      },
+      "statuses": {
+        "200": 20
+      }
+    },
+    "safety_overview": {
+      "firstRequestMs": 86.67,
+      "requests": 20,
+      "throughputRps": 20.48,
+      "p50Ms": 47.95,
+      "p95Ms": 69.2,
+      "p99Ms": 87.97,
+      "meanMs": 48.84,
+      "errorRate": 0.0,
+      "timeoutRate": 0.0,
+      "responseBytes": {
+        "min": 7878,
+        "max": 7878
+      },
+      "statuses": {
+        "200": 20
+      }
+    },
+    "support_run_detail": {
+      "firstRequestMs": 316.07,
+      "requests": 20,
+      "throughputRps": 17.58,
+      "p50Ms": 54.31,
+      "p95Ms": 74.02,
+      "p99Ms": 77.36,
+      "meanMs": 56.87,
+      "errorRate": 0.0,
+      "timeoutRate": 0.0,
+      "responseBytes": {
+        "min": 4192,
+        "max": 4192
+      },
+      "statuses": {
+        "200": 20
+      }
+    },
+    "approval_detail": {
+      "firstRequestMs": 83.54,
+      "requests": 20,
+      "throughputRps": 18.15,
+      "p50Ms": 51.12,
+      "p95Ms": 86.49,
+      "p99Ms": 90.16,
+      "meanMs": 55.1,
+      "errorRate": 0.0,
+      "timeoutRate": 0.0,
+      "responseBytes": {
+        "min": 4276,
+        "max": 4276
+      },
+      "statuses": {
+        "200": 20
+      }
+    },
+    "trace_detail": {
+      "firstRequestMs": 272.54,
+      "requests": 20,
+      "throughputRps": 4.23,
+      "p50Ms": 207.94,
+      "p95Ms": 363.17,
+      "p99Ms": 420.97,
+      "meanMs": 236.33,
+      "errorRate": 0.0,
+      "timeoutRate": 0.0,
+      "responseBytes": {
+        "min": 102050,
+        "max": 104427
+      },
+      "statuses": {
+        "200": 20
+      }
+    },
+    "audit_detail": {
+      "firstRequestMs": 81.27,
+      "requests": 20,
+      "throughputRps": 20.85,
+      "p50Ms": 43.74,
+      "p95Ms": 76.37,
+      "p99Ms": 96.07,
+      "meanMs": 47.95,
+      "errorRate": 0.0,
+      "timeoutRate": 0.0,
+      "responseBytes": {
+        "min": 535,
+        "max": 535
+      },
+      "statuses": {
+        "200": 20
+      }
+    },
+    "evaluation_detail": {
+      "firstRequestMs": 143.78,
+      "requests": 20,
+      "throughputRps": 26.67,
+      "p50Ms": 35.52,
+      "p95Ms": 50.65,
+      "p99Ms": 51.76,
+      "meanMs": 37.5,
+      "errorRate": 0.0,
+      "timeoutRate": 0.0,
+      "responseBytes": {
+        "min": 19707,
+        "max": 19707
+      },
+      "statuses": {
+        "200": 20
+      }
+    },
+    "knowledge_documents": {
+      "firstRequestMs": 105.36,
+      "requests": 20,
+      "throughputRps": 35.58,
+      "p50Ms": 26.64,
+      "p95Ms": 36.61,
+      "p99Ms": 45.75,
+      "meanMs": 28.1,
+      "errorRate": 0.0,
+      "timeoutRate": 0.0,
+      "responseBytes": {
+        "min": 3353,
+        "max": 3353
+      },
+      "statuses": {
+        "200": 20
+      }
+    }
+  },
+  "traceDetailDecomposition": {
+    "method": "Paired samples. Jaeger is timed inside JaegerClient from HTTP dispatch through response JSON decoding; applicationApi is total authenticated endpoint latency minus that measured dependency interval.",
+    "applicationApi": {
+      "samples": 20,
+      "p50Ms": 121.14,
+      "p95Ms": 202.3,
+      "p99Ms": 324.86,
+      "meanMs": 137.02
+    },
+    "jaegerDependency": {
+      "samples": 20,
+      "p50Ms": 90.06,
+      "p95Ms": 192.82,
+      "p99Ms": 206.82,
+      "meanMs": 99.31
+    },
+    "total": {
+      "samples": 20,
+      "p50Ms": 207.94,
+      "p95Ms": 363.17,
+      "p99Ms": 420.97,
+      "meanMs": 236.33
+    }
+  },
+  "burst": {
+    "requests": 50,
+    "throughputRps": 40.65,
+    "p50Ms": 102.36,
+    "p95Ms": 189.69,
+    "p99Ms": 196.38,
+    "meanMs": 110.33,
+    "errorRate": 0.0,
+    "timeoutRate": 0.0,
+    "responseBytes": {
+      "min": 26033,
+      "max": 26033
+    },
+    "statuses": {
+      "200": 50
+    },
+    "wallSeconds": 1.23
+  },
+  "soak": {
+    "requests": 722,
+    "throughputRps": 47.91,
+    "p50Ms": 63.21,
+    "p95Ms": 183.95,
+    "p99Ms": 335.79,
+    "meanMs": 82.3,
+    "errorRate": 0.0,
+    "timeoutRate": 0.0,
+    "responseBytes": {
+      "min": 12254,
+      "max": 12254
+    },
+    "statuses": {
+      "200": 722
+    },
+    "wallSeconds": 15.07
+  }
+}

@@ -22,4 +22,10 @@ class JaegerClientTest {
         var span = new ObjectMapper().readTree("{\"references\":[]}");
         assertEquals("", JaegerClient.parentSpanId(span));
     }
+
+    @Test
+    void traceFetchRetainsMeasuredHttpDuration() {
+        var fetch = JaegerClient.TraceFetch.empty(12.34);
+        assertEquals(12.34, fetch.httpDurationMs());
+    }
 }

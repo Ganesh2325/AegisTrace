@@ -1,0 +1,20 @@
+{
+  "measuredAt": "2026-10-07T19:33:40Z",
+  "method": "Authenticated HTTP POST; one cold request excluded from 50 warm samples; existing active knowledge version and bounded topK=5.",
+  "firstRequestMs": 6752.49,
+  "requests": 50,
+  "throughputRps": 4.05,
+  "p50Ms": 218.26,
+  "p95Ms": 401.13,
+  "p99Ms": 486.42,
+  "meanMs": 247.19,
+  "errorRate": 0.0,
+  "timeoutRate": 0.0,
+  "responseBytes": {
+    "min": 4028,
+    "max": 4029
+  },
+  "statuses": {
+    "200": 50
+  }
+}
