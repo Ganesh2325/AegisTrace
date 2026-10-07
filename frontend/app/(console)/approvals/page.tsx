@@ -38,20 +38,28 @@ export default function ApprovalsPage() {
   const [offset, setOffset] = useState(0);
   const [attempt, setAttempt] = useState(0);
 
-  function load() {
+  function load(signal?: AbortSignal) {
     const params = new URLSearchParams({ page: String(offset), size: "20" });
     if (status) params.set("status", status);
     if (risk) params.set("risk", risk);
     if (q.trim()) params.set("q", q.trim());
     if (requester.trim()) params.set("requester", requester.trim());
     if (agent.trim()) params.set("agent", agent.trim());
-    api<ApprovalPage>(`/api/v1/approvals?${params}`)
+    api<ApprovalPage>(`/api/v1/approvals?${params}`, { signal })
       .then((body) => { setError(""); setPage(body); })
-      .catch((err) => setError(err instanceof ApiError ? err.message : err.message))
-      .finally(() => setReady(true));
+      .catch((err) => {
+        if (!(err instanceof DOMException && err.name === "AbortError")) {
+          setError(err instanceof ApiError ? err.message : err.message);
+        }
+      })
+      .finally(() => { if (!signal?.aborted) setReady(true); });
   }
 
-  useEffect(() => { load(); }, [attempt, offset, status, risk]);
+  useEffect(() => {
+    const controller = new AbortController();
+    load(controller.signal);
+    return () => controller.abort();
+  }, [attempt, offset, status, risk]);
   useEffect(() => {
     const timer = window.setInterval(() => setAttempt((value) => value + 1), LIST_POLL_MS);
     return () => window.clearInterval(timer);

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import random
+
 
 def classify_retry(error_type: str, status_code: int | None = None) -> bool:
     name = (error_type or "").upper()
@@ -30,3 +32,14 @@ def backoff_seconds(attempt: int, cap: int = 60) -> int:
     if attempt < 1:
         attempt = 1
     return min(cap, 2 ** attempt)
+
+
+def jittered_backoff_seconds(attempt: int, cap: int = 60, *, random_value: float | None = None) -> float:
+    """Return bounded exponential backoff with equal jitter.
+
+    ``random_value`` exists so reliability tests can verify exact bounds without
+    depending on process-global random state.
+    """
+    base = float(backoff_seconds(attempt, cap))
+    sample = random.random() if random_value is None else min(max(random_value, 0.0), 1.0)
+    return (base / 2.0) + (base / 2.0 * sample)

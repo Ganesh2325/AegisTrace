@@ -22,6 +22,8 @@ public class ApprovalService {
     private static final Set<String> RISKS = Set.of("LOW", "MEDIUM", "HIGH", "CRITICAL");
     private static final int DEFAULT_SIZE = 20;
     private static final int MAX_SIZE = 50;
+    private static final int MAX_FILTER_LENGTH = 200;
+    private static final int TIMELINE_LIMIT = 100;
 
     private static final String FROM = """
             from approvals a
@@ -49,6 +51,9 @@ public class ApprovalService {
     public Map<String, Object> list(Actor actor, UUID workspaceId, String status, String risk, String q,
                                     String requester, String agent, int page, int size) {
         requireRead(actor, workspaceId);
+        validateFilter(q);
+        validateFilter(requester);
+        validateFilter(agent);
         int limit = Math.min(Math.max(size, 1), MAX_SIZE);
         if (size <= 0) {
             limit = DEFAULT_SIZE;
@@ -297,17 +302,19 @@ public class ApprovalService {
 
     private List<Map<String, Object>> timeline(UUID runId) {
         return jdbc.query("""
-                select sequence, event_type, state, payload::text as payload, created_at
-                from run_events
-                where run_id = :id
-                  and event_type in (
-                    'TOOL_PROPOSED', 'POLICY_DECIDED', 'APPROVAL_REQUIRED', 'APPROVAL_APPROVED',
-                    'APPROVAL_REJECTED', 'APPROVAL_EXPIRED', 'APPROVAL_CANCELLED',
-                    'TOOL_STARTED', 'TOOL_COMPLETED', 'RUN_COMPLETED', 'RUN_FAILED',
-                    'RUN_CANCELLED', 'RUN_TIMED_OUT'
-                  )
-                order by sequence
-                """, Map.of("id", runId), (rs, n) -> Map.of(
+                select sequence, event_type, state, payload, created_at from (
+                    select sequence, event_type, state, payload::text as payload, created_at
+                    from run_events
+                    where run_id = :id
+                      and event_type in (
+                        'TOOL_PROPOSED', 'POLICY_DECIDED', 'APPROVAL_REQUIRED', 'APPROVAL_APPROVED',
+                        'APPROVAL_REJECTED', 'APPROVAL_EXPIRED', 'APPROVAL_CANCELLED',
+                        'TOOL_STARTED', 'TOOL_COMPLETED', 'RUN_COMPLETED', 'RUN_FAILED',
+                        'RUN_CANCELLED', 'RUN_TIMED_OUT'
+                      )
+                    order by sequence desc limit :limit
+                ) history order by sequence
+                """, Map.of("id", runId, "limit", TIMELINE_LIMIT), (rs, n) -> Map.of(
                 "sequence", rs.getInt("sequence"),
                 "eventType", rs.getString("event_type"),
                 "state", rs.getString("state"),
@@ -337,5 +344,11 @@ public class ApprovalService {
 
     private static boolean blank(String value) {
         return value == null || value.isBlank();
+    }
+
+    private static void validateFilter(String value) {
+        if (value != null && value.length() > MAX_FILTER_LENGTH) {
+            throw new ApiException("VALIDATION_ERROR", "Approval filters are limited to 200 characters.", 400);
+        }
     }
 }

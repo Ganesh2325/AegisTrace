@@ -2,7 +2,7 @@ from aegislib.chunking import chunk_markdown, chunk_pages
 from aegislib.embedding import embed, cosine
 from aegislib.grounding import ABSTAIN, grounded_answer, rank_chunks
 from aegislib.planner import merge_model_proposal, propose_tool
-from aegislib.retries import backoff_seconds, classify_retry
+from aegislib.retries import backoff_seconds, classify_retry, jittered_backoff_seconds
 from aegislib.execution import ExecutionError, execute_ticket, execution_key
 
 from corpus import load_corpus
@@ -102,6 +102,9 @@ def test_retry_matrix():
     assert classify_retry("PROMPT_INJECTION") is False
     assert backoff_seconds(1) == 2
     assert backoff_seconds(10) == 60
+    assert jittered_backoff_seconds(3, random_value=0.0) == 4
+    assert jittered_backoff_seconds(3, random_value=1.0) == 8
+    assert jittered_backoff_seconds(20, cap=60, random_value=1.0) == 60
 
 
 class _Cursor:

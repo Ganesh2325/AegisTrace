@@ -4,16 +4,18 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { activeItem, breadcrumb, commandsFor, decideRoute, environmentLabel, visibleGroups, type Command } from "../lib/access";
-import { api, roleOf, type Me } from "../lib/api";
+import { api, ApiError, roleOf, type Me } from "../lib/api";
 import { clearSession, writeSession } from "../lib/session";
 import { Button } from "./ui/Button";
 import { Icon } from "./ui/Icon";
-import { ForbiddenState, PageLoading } from "./ui/States";
+import { ErrorState, ForbiddenState, PageLoading } from "./ui/States";
 import { ToastProvider } from "./ui/Toast";
 
 export function Shell({ children }: { children: ReactNode }) {
   const [me, setMe] = useState<Me | null>(null);
   const [ready, setReady] = useState(false);
+  const [sessionError, setSessionError] = useState<string | null>(null);
+  const [sessionAttempt, setSessionAttempt] = useState(0);
   const [leaving, setLeaving] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const [drawer, setDrawer] = useState(false);
@@ -28,18 +30,29 @@ export function Shell({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let stop = false;
-    api<Me>("/api/v1/auth/me").then((row) => {
+    const controller = new AbortController();
+    setReady(false);
+    setSessionError(null);
+    api<Me>("/api/v1/auth/me", { signal: controller.signal }).then((row) => {
       if (stop) return;
       writeSession(row);
       setMe(row);
       setReady(true);
-    }).catch(() => {
+    }).catch((error) => {
       if (stop) return;
-      clearSession();
-      router.replace("/login");
+      if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
+        clearSession();
+        router.replace("/login");
+        return;
+      }
+      setSessionError(error instanceof Error ? error.message : "The session check failed.");
+      setReady(true);
     });
-    return () => { stop = true; };
-  }, [router]);
+    return () => {
+      stop = true;
+      controller.abort();
+    };
+  }, [router, sessionAttempt]);
 
   useEffect(() => {
     setCollapsed(window.localStorage.getItem("aegis.nav.collapsed") === "1");
@@ -74,7 +87,16 @@ export function Shell({ children }: { children: ReactNode }) {
     drawerRef.current?.querySelector<HTMLElement>("a")?.focus();
   }, [drawer]);
 
-  if (!ready || !me) return <PageLoading label="Checking session…" />;
+  if (!ready) return <PageLoading label="Checking session…" />;
+  if (sessionError || !me) {
+    return (
+      <main className="mx-auto max-w-xl px-6 py-16">
+        <ErrorState title="Session check unavailable" onRetry={() => setSessionAttempt((value) => value + 1)}>
+          {sessionError || "The session could not be loaded."} Your session was not cleared.
+        </ErrorState>
+      </main>
+    );
+  }
 
   const role = roleOf(me);
   const groups = visibleGroups(role);

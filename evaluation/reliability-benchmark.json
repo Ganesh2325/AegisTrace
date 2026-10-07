@@ -1,0 +1,340 @@
+{
+  "measuredAt": "2026-10-07T13:47:33Z",
+  "baseUrl": "http://localhost:8080",
+  "method": "Local Docker Compose, authenticated HTTP, sequential endpoint baseline plus bounded concurrent burst and soak.",
+  "baseline": {
+    "operations_overview": {
+      "firstRequestMs": 1162.65,
+      "requests": 20,
+      "throughputRps": 3.25,
+      "p50Ms": 266.63,
+      "p95Ms": 463.57,
+      "p99Ms": 610.28,
+      "meanMs": 307.79,
+      "errorRate": 0.0,
+      "timeoutRate": 0.0,
+      "responseBytes": {
+        "min": 26295,
+        "max": 26615
+      },
+      "statuses": {
+        "200": 20
+      }
+    },
+    "support_run_list": {
+      "firstRequestMs": 133.92,
+      "requests": 20,
+      "throughputRps": 9.41,
+      "p50Ms": 82.88,
+      "p95Ms": 206.79,
+      "p99Ms": 214.09,
+      "meanMs": 106.26,
+      "errorRate": 0.0,
+      "timeoutRate": 0.0,
+      "responseBytes": {
+        "min": 4954,
+        "max": 4954
+      },
+      "statuses": {
+        "200": 20
+      }
+    },
+    "approval_list": {
+      "firstRequestMs": 175.59,
+      "requests": 20,
+      "throughputRps": 5.05,
+      "p50Ms": 186.32,
+      "p95Ms": 301.61,
+      "p99Ms": 386.12,
+      "meanMs": 198.2,
+      "errorRate": 0.0,
+      "timeoutRate": 0.0,
+      "responseBytes": {
+        "min": 13912,
+        "max": 13912
+      },
+      "statuses": {
+        "200": 20
+      }
+    },
+    "knowledge_list": {
+      "firstRequestMs": 128.32,
+      "requests": 20,
+      "throughputRps": 7.48,
+      "p50Ms": 130.41,
+      "p95Ms": 198.12,
+      "p99Ms": 223.56,
+      "meanMs": 133.64,
+      "errorRate": 0.0,
+      "timeoutRate": 0.0,
+      "responseBytes": {
+        "min": 300,
+        "max": 300
+      },
+      "statuses": {
+        "200": 20
+      }
+    },
+    "observability_overview": {
+      "firstRequestMs": 4979.32,
+      "requests": 20,
+      "throughputRps": 5.34,
+      "p50Ms": 177.29,
+      "p95Ms": 301.68,
+      "p99Ms": 302.36,
+      "meanMs": 187.37,
+      "errorRate": 0.0,
+      "timeoutRate": 0.0,
+      "responseBytes": {
+        "min": 8808,
+        "max": 8808
+      },
+      "statuses": {
+        "200": 20
+      }
+    },
+    "trace_list": {
+      "firstRequestMs": 113.73,
+      "requests": 20,
+      "throughputRps": 8.21,
+      "p50Ms": 117.54,
+      "p95Ms": 173.5,
+      "p99Ms": 197.71,
+      "meanMs": 121.75,
+      "errorRate": 0.0,
+      "timeoutRate": 0.0,
+      "responseBytes": {
+        "min": 7411,
+        "max": 7411
+      },
+      "statuses": {
+        "200": 20
+      }
+    },
+    "audit_list": {
+      "firstRequestMs": 102.47,
+      "requests": 20,
+      "throughputRps": 8.25,
+      "p50Ms": 121.04,
+      "p95Ms": 191.25,
+      "p99Ms": 217.67,
+      "meanMs": 121.28,
+      "errorRate": 0.0,
+      "timeoutRate": 0.0,
+      "responseBytes": {
+        "min": 12197,
+        "max": 12197
+      },
+      "statuses": {
+        "200": 20
+      }
+    },
+    "evaluation_overview": {
+      "firstRequestMs": 154.96,
+      "requests": 20,
+      "throughputRps": 12.44,
+      "p50Ms": 79.14,
+      "p95Ms": 98.62,
+      "p99Ms": 122.36,
+      "meanMs": 80.39,
+      "errorRate": 0.0,
+      "timeoutRate": 0.0,
+      "responseBytes": {
+        "min": 3746,
+        "max": 3746
+      },
+      "statuses": {
+        "200": 20
+      }
+    },
+    "evaluation_history": {
+      "firstRequestMs": 54.09,
+      "requests": 20,
+      "throughputRps": 15.95,
+      "p50Ms": 62.37,
+      "p95Ms": 79.55,
+      "p99Ms": 84.11,
+      "meanMs": 62.69,
+      "errorRate": 0.0,
+      "timeoutRate": 0.0,
+      "responseBytes": {
+        "min": 2511,
+        "max": 2511
+      },
+      "statuses": {
+        "200": 20
+      }
+    },
+    "safety_overview": {
+      "firstRequestMs": 133.04,
+      "requests": 20,
+      "throughputRps": 14.44,
+      "p50Ms": 68.93,
+      "p95Ms": 95.6,
+      "p99Ms": 104.04,
+      "meanMs": 69.25,
+      "errorRate": 0.0,
+      "timeoutRate": 0.0,
+      "responseBytes": {
+        "min": 7833,
+        "max": 7833
+      },
+      "statuses": {
+        "200": 20
+      }
+    },
+    "support_run_detail": {
+      "firstRequestMs": 119.39,
+      "requests": 20,
+      "throughputRps": 12.52,
+      "p50Ms": 79.73,
+      "p95Ms": 98.46,
+      "p99Ms": 129.72,
+      "meanMs": 79.85,
+      "errorRate": 0.0,
+      "timeoutRate": 0.0,
+      "responseBytes": {
+        "min": 2309,
+        "max": 2309
+      },
+      "statuses": {
+        "200": 20
+      }
+    },
+    "approval_detail": {
+      "firstRequestMs": 139.94,
+      "requests": 20,
+      "throughputRps": 13.48,
+      "p50Ms": 72.23,
+      "p95Ms": 103.52,
+      "p99Ms": 112.72,
+      "meanMs": 74.18,
+      "errorRate": 0.0,
+      "timeoutRate": 0.0,
+      "responseBytes": {
+        "min": 4017,
+        "max": 4017
+      },
+      "statuses": {
+        "200": 20
+      }
+    },
+    "trace_detail": {
+      "firstRequestMs": 1631.6,
+      "requests": 20,
+      "throughputRps": 2.69,
+      "p50Ms": 286.75,
+      "p95Ms": 768.04,
+      "p99Ms": 1336.28,
+      "meanMs": 371.25,
+      "errorRate": 0.0,
+      "timeoutRate": 0.0,
+      "responseBytes": {
+        "min": 77748,
+        "max": 77748
+      },
+      "statuses": {
+        "200": 20
+      }
+    },
+    "audit_detail": {
+      "firstRequestMs": 272.23,
+      "requests": 20,
+      "throughputRps": 9.23,
+      "p50Ms": 99.48,
+      "p95Ms": 193.08,
+      "p99Ms": 264.24,
+      "meanMs": 108.35,
+      "errorRate": 0.0,
+      "timeoutRate": 0.0,
+      "responseBytes": {
+        "min": 535,
+        "max": 535
+      },
+      "statuses": {
+        "200": 20
+      }
+    },
+    "evaluation_detail": {
+      "firstRequestMs": 614.85,
+      "requests": 20,
+      "throughputRps": 3.82,
+      "p50Ms": 169.32,
+      "p95Ms": 536.31,
+      "p99Ms": 1282.3,
+      "meanMs": 261.78,
+      "errorRate": 0.0,
+      "timeoutRate": 0.0,
+      "responseBytes": {
+        "min": 12600,
+        "max": 12600
+      },
+      "statuses": {
+        "200": 20
+      }
+    },
+    "knowledge_documents": {
+      "firstRequestMs": 408.3,
+      "requests": 20,
+      "throughputRps": 11.83,
+      "p50Ms": 75.07,
+      "p95Ms": 156.94,
+      "p99Ms": 176.69,
+      "meanMs": 84.53,
+      "errorRate": 0.0,
+      "timeoutRate": 0.0,
+      "responseBytes": {
+        "min": 3353,
+        "max": 3353
+      },
+      "statuses": {
+        "200": 20
+      }
+    }
+  },
+  "runStart": {
+    "firstStatus": 202,
+    "firstMs": 895.03,
+    "replayStatus": 202,
+    "replayMs": 95.98,
+    "firstRunId": "5aff4e1a-ddd2-4c67-a5ee-9962a7b5bfb5",
+    "replayRunId": "5aff4e1a-ddd2-4c67-a5ee-9962a7b5bfb5",
+    "sameRun": true
+  },
+  "burst": {
+    "requests": 100,
+    "throughputRps": 14.99,
+    "p50Ms": 623.31,
+    "p95Ms": 1071.3,
+    "p99Ms": 1232.01,
+    "meanMs": 613.74,
+    "errorRate": 0.0,
+    "timeoutRate": 0.0,
+    "responseBytes": {
+      "min": 26295,
+      "max": 26295
+    },
+    "statuses": {
+      "200": 100
+    },
+    "wallSeconds": 6.67
+  },
+  "soak": {
+    "requests": 1308,
+    "throughputRps": 21.69,
+    "p50Ms": 155.68,
+    "p95Ms": 399.64,
+    "p99Ms": 600.58,
+    "meanMs": 183.22,
+    "errorRate": 0.0,
+    "timeoutRate": 0.0,
+    "responseBytes": {
+      "min": 12197,
+      "max": 12197
+    },
+    "statuses": {
+      "200": 1308
+    },
+    "wallSeconds": 60.31
+  }
+}

@@ -11,7 +11,7 @@ from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from aegislib.embedding import embed
+from aegislib.embedding import embed, to_pgvector
 from aegislib.grounding import grounded_answer, injection_signals, rank_chunks
 from aegislib.planner import merge_model_proposal
 from aegislib.telemetry import configure, consumer_context, span
@@ -84,7 +84,10 @@ def plan(body: PlanRequest, x_internal_token: str = Header(default=""), tracepar
             "service": "agent-runtime",
             "knowledge.version_id": body.knowledgeBaseVersionId or "",
         }):
-            chunks = _load_chunks(body.workspaceId, body.knowledgeBaseId, body.knowledgeBaseVersionId, body.embeddingModel)
+            chunks = _load_chunks(
+                body.workspaceId, body.knowledgeBaseId, body.knowledgeBaseVersionId,
+                body.embeddingModel, body.question, candidate_limit=80,
+            )
         retrieval_ms = int((time.perf_counter() - started) * 1000)
         ranked = rank_chunks(body.question, chunks, k=4)
         evidence = [{
@@ -170,7 +173,10 @@ def retrieve(body: RetrieveRequest, x_internal_token: str = Header(default=""), 
             "service": "agent-runtime",
             "knowledge.version_id": body.knowledgeBaseVersionId or "",
         }):
-            chunks = _load_chunks(body.workspaceId, body.knowledgeBaseId, body.knowledgeBaseVersionId, body.embeddingModel)
+            chunks = _load_chunks(
+                body.workspaceId, body.knowledgeBaseId, body.knowledgeBaseVersionId,
+                body.embeddingModel, query, candidate_limit=min(200, max(80, top_k * 10)),
+            )
         ranked = rank_chunks(query, chunks, k=top_k)
         hits = []
         for chunk in ranked:
@@ -198,27 +204,51 @@ def consumer_context_from_header(header: str | None):
     return context_from_traceparent(header)
 
 
-def _load_chunks(workspace_id: str, knowledge_base_id: str, knowledge_base_version_id: str | None, embedding_model: str) -> list[dict]:
+def _load_chunks(
+    workspace_id: str,
+    knowledge_base_id: str,
+    knowledge_base_version_id: str | None,
+    embedding_model: str,
+    query: str,
+    candidate_limit: int = 100,
+) -> list[dict]:
+    limit = min(200, max(20, candidate_limit))
+    query_vector = to_pgvector(embed(query))
     sql = """
-        select c.id, c.document_id, d.title, c.section, c.page_number, c.content, c.embedding::text
-        from document_chunks c
-        join documents d on d.id = c.document_id
-        join knowledge_bases kb on kb.id = d.knowledge_base_id
-        join knowledge_version_documents kvd on kvd.document_id = d.id
-        join knowledge_base_versions kv on kv.id = kvd.knowledge_base_version_id
-        where kb.workspace_id = %s
-          and d.knowledge_base_id = %s
-          and kv.id = coalesce(%s::uuid, (
-              select id from knowledge_base_versions
-              where knowledge_base_id = %s and current_version
-              limit 1
-          ))
-          and c.embedding_model = %s
+        with scoped as (
+            select c.id, c.document_id, d.title, c.section, c.page_number, c.content,
+                   c.embedding, c.content_tsv
+            from document_chunks c
+            join documents d on d.id = c.document_id
+            join knowledge_bases kb on kb.id = d.knowledge_base_id
+            join knowledge_version_documents kvd on kvd.document_id = d.id
+            join knowledge_base_versions kv on kv.id = kvd.knowledge_base_version_id
+            where kb.workspace_id = %s
+              and d.knowledge_base_id = %s
+              and kv.id = coalesce(%s::uuid, (
+                  select id from knowledge_base_versions
+                  where knowledge_base_id = %s and current_version
+                  limit 1
+              ))
+              and c.embedding_model = %s
+        ), candidates as (
+            (select id from scoped order by embedding <=> %s::vector limit %s)
+            union
+            (select id from scoped
+             where content_tsv @@ websearch_to_tsquery('english', %s)
+             order by ts_rank_cd(content_tsv, websearch_to_tsquery('english', %s)) desc
+             limit %s)
+        )
+        select s.id, s.document_id, s.title, s.section, s.page_number, s.content, s.embedding::text
+        from scoped s join candidates c on c.id = s.id
     """
-    with psycopg.connect(DATABASE_URL) as conn:
+    with psycopg.connect(DATABASE_URL, connect_timeout=2, options="-c statement_timeout=5000") as conn:
         rows = conn.execute(
             sql,
-            (workspace_id, knowledge_base_id, knowledge_base_version_id, knowledge_base_id, embedding_model),
+            (
+                workspace_id, knowledge_base_id, knowledge_base_version_id, knowledge_base_id, embedding_model,
+                query_vector, limit, query, query, limit,
+            ),
         ).fetchall()
     chunks = []
     for row in rows:

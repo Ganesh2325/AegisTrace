@@ -15,6 +15,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 @Service
@@ -25,6 +26,7 @@ public class KnowledgeService {
     public static final int MAX_TOP_K = 20;
     public static final int MAX_QUERY = 2000;
     public static final int MAX_CHUNKS = 50;
+    public static final int MAX_FILTER_LENGTH = 200;
 
     private final NamedParameterJdbcTemplate jdbc;
     private final TransactionTemplate tx;
@@ -95,12 +97,20 @@ public class KnowledgeService {
 
     public Map<String, Object> documents(UUID workspaceId, UUID knowledgeBaseId, int page, int size, String status, String query, String mediaType) {
         ensureBase(workspaceId, knowledgeBaseId);
+        if ((query != null && query.length() > MAX_FILTER_LENGTH)
+                || (mediaType != null && mediaType.length() > MAX_FILTER_LENGTH)) {
+            throw new ApiException("VALIDATION_ERROR", "Document filters are limited to 200 characters.", 400);
+        }
+        if (!blank(status) && !Set.of("UPLOADED", "PROCESSING", "ACTIVE", "FAILED", "DISABLED")
+                .contains(status.trim().toUpperCase())) {
+            throw new ApiException("VALIDATION_ERROR", "Unknown document status.", 400);
+        }
         int pageSize = Math.min(MAX_PAGE_SIZE, Math.max(1, size <= 0 ? DEFAULT_PAGE_SIZE : size));
         int pageIndex = Math.max(0, page);
         var params = new MapSqlParameterSource()
                 .addValue("id", knowledgeBaseId)
                 .addValue("workspace", workspaceId)
-                .addValue("status", blank(status) ? null : status)
+                .addValue("status", blank(status) ? null : status.trim().toUpperCase())
                 .addValue("q", blank(query) ? null : "%" + query.trim() + "%")
                 .addValue("media", blank(mediaType) ? null : mediaType)
                 .addValue("limit", pageSize)
@@ -194,44 +204,47 @@ public class KnowledgeService {
                                       String declaredType, byte[] bytes) {
         ensureBase(workspaceId, knowledgeBaseId);
         var file = KnowledgeFiles.validate(originalName, declaredType, bytes);
-        var existing = jdbc.query("""
-                select id from documents
-                where knowledge_base_id = :kb and checksum_sha256 = :checksum
-                  and status in ('UPLOADED', 'PROCESSING', 'ACTIVE')
-                limit 1
-                """, Map.of("kb", knowledgeBaseId, "checksum", file.checksumSha256()),
-                (rs, n) -> UUID.fromString(rs.getString("id")));
-        if (!existing.isEmpty()) {
-            throw new ApiException("DUPLICATE_DOCUMENT", "A document with this checksum already exists in this knowledge base.", 409);
-        }
         UUID documentId = UUID.randomUUID();
-        String key = "documents/" + workspaceId + "/" + documentId;
+        String key = "documents/" + workspaceId + "/" + knowledgeBaseId + "/" + file.checksumSha256();
         objects.put(key, bytes, file.mediaType());
         String resolvedTitle = title == null || title.isBlank() ? fallbackTitle(originalName) : title.trim();
-        jdbc.update("""
-                insert into documents (
-                    id, workspace_id, knowledge_base_id, title, media_type, storage_key, checksum_sha256, byte_size, status, created_by
-                ) values (:id, :workspace, :kb, :title, :media, :key, :checksum, :size, 'UPLOADED', :user)
-                """, new MapSqlParameterSource()
-                .addValue("id", documentId)
-                .addValue("workspace", workspaceId)
-                .addValue("kb", knowledgeBaseId)
-                .addValue("title", resolvedTitle)
-                .addValue("media", file.mediaType())
-                .addValue("key", key)
-                .addValue("checksum", file.checksumSha256())
-                .addValue("size", file.byteSize())
-                .addValue("user", actor.id()));
-        jdbc.update("""
-                insert into jobs (id, workspace_id, job_type, payload, status, max_attempts, idempotency_key)
-                values (:id, :workspace, 'EMBED_DOCUMENT', :payload, 'PENDING', 5, :idem)
-                """, new MapSqlParameterSource()
-                .addValue("id", UUID.randomUUID())
-                .addValue("workspace", workspaceId)
-                .addValue("payload", Jsons.jsonb(Jsons.write(mapper, Map.of("documentId", documentId.toString()))))
-                .addValue("idem", "embed:" + documentId));
-        audit.record(workspaceId, actor.id(), "DOCUMENT_UPLOADED", "document", documentId.toString(), null,
-                Map.of("title", resolvedTitle, "checksum", file.checksumSha256()));
+        tx.executeWithoutResult(status -> {
+            jdbc.query("select pg_advisory_xact_lock(hashtextextended(:key, 0))",
+                    Map.of("key", "document:" + knowledgeBaseId + ":" + file.checksumSha256()), rs -> null);
+            Integer existing = jdbc.queryForObject("""
+                    select count(*)::int from documents
+                    where knowledge_base_id = :kb and checksum_sha256 = :checksum
+                      and status in ('UPLOADED', 'PROCESSING', 'ACTIVE')
+                    """, Map.of("kb", knowledgeBaseId, "checksum", file.checksumSha256()), Integer.class);
+            if (existing != null && existing > 0) {
+                throw new ApiException("DUPLICATE_DOCUMENT",
+                        "A document with this checksum already exists in this knowledge base.", 409);
+            }
+            jdbc.update("""
+                    insert into documents (
+                        id, workspace_id, knowledge_base_id, title, media_type, storage_key, checksum_sha256, byte_size, status, created_by
+                    ) values (:id, :workspace, :kb, :title, :media, :key, :checksum, :size, 'UPLOADED', :user)
+                    """, new MapSqlParameterSource()
+                    .addValue("id", documentId)
+                    .addValue("workspace", workspaceId)
+                    .addValue("kb", knowledgeBaseId)
+                    .addValue("title", resolvedTitle)
+                    .addValue("media", file.mediaType())
+                    .addValue("key", key)
+                    .addValue("checksum", file.checksumSha256())
+                    .addValue("size", file.byteSize())
+                    .addValue("user", actor.id()));
+            jdbc.update("""
+                    insert into jobs (id, workspace_id, job_type, payload, status, max_attempts, idempotency_key)
+                    values (:id, :workspace, 'EMBED_DOCUMENT', :payload, 'PENDING', 5, :idem)
+                    """, new MapSqlParameterSource()
+                    .addValue("id", UUID.randomUUID())
+                    .addValue("workspace", workspaceId)
+                    .addValue("payload", Jsons.jsonb(Jsons.write(mapper, Map.of("documentId", documentId.toString()))))
+                    .addValue("idem", "embed:" + documentId));
+            audit.record(workspaceId, actor.id(), "DOCUMENT_UPLOADED", "document", documentId.toString(), null,
+                    Map.of("title", resolvedTitle, "checksum", file.checksumSha256()));
+        });
         var body = new LinkedHashMap<String, Object>();
         body.put("id", documentId);
         body.put("status", "UPLOADED");

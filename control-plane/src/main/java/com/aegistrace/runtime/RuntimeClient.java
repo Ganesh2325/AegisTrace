@@ -79,10 +79,16 @@ public class RuntimeClient {
             }
             return Plan.from(node, mapper);
         } catch (RestClientResponseException ex) {
-            boolean retry = ex.getStatusCode().value() == 429 || ex.getStatusCode().is5xxServerError();
-            throw new RuntimeCallException(retry ? "MODEL_TIMEOUT" : "INTERNAL", "The agent runtime rejected the plan request.", retry);
+            int status = ex.getStatusCode().value();
+            if (status == 504) {
+                throw new RuntimeCallException("MODEL_TIMEOUT", "The model provider timed out.", true);
+            }
+            boolean retry = status == 429 || ex.getStatusCode().is5xxServerError();
+            String category = status == 429 ? "DEPENDENCY_UNAVAILABLE"
+                    : ex.getStatusCode().is5xxServerError() ? "RUNTIME_FAILURE" : "INTERNAL_ERROR";
+            throw new RuntimeCallException(category, "The agent runtime rejected the plan request.", retry);
         } catch (ResourceAccessException ex) {
-            throw new RuntimeCallException("MODEL_TIMEOUT", "The agent runtime timed out.", true);
+            throw new RuntimeCallException("RUNTIME_FAILURE", "The agent runtime is unavailable or timed out.", true);
         }
     }
 

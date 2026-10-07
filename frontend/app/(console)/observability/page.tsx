@@ -39,28 +39,35 @@ function Overview() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const inflight = useRef(false);
+  const request = useRef<AbortController | null>(null);
 
   const load = useCallback(async (background: boolean) => {
-    if (inflight.current) return;
-    inflight.current = true;
+    request.current?.abort();
+    const controller = new AbortController();
+    request.current = controller;
     if (background) setRefreshing(true);
     else setLoading(true);
     try {
-      const row = await api<ObservabilityOverview>(`/api/v1/observability/overview?window=${window}`);
+      const row = await api<ObservabilityOverview>(`/api/v1/observability/overview?window=${window}`, { signal: controller.signal });
       setData(row);
       setError("");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to load observability");
-      if (!background) setData(null);
+      if (!(err instanceof DOMException && err.name === "AbortError")) {
+        setError(err instanceof Error ? err.message : "Unable to load observability");
+        if (!background) setData(null);
+      }
     } finally {
-      inflight.current = false;
-      setLoading(false);
-      setRefreshing(false);
+      if (request.current === controller) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   }, [window]);
 
-  useEffect(() => { void load(false); }, [load]);
+  useEffect(() => {
+    void load(false);
+    return () => request.current?.abort();
+  }, [load]);
 
   function setRange(next: ObsWindow) {
     const search = new URLSearchParams(params.toString());
@@ -120,7 +127,7 @@ function Overview() {
           </div>
           <div className="grid gap-3 lg:grid-cols-2">
             <Card>
-              <SectionHeader title="Latency" description="Canonical Phase 1 percentiles. Agent-only time is not stored separately." />
+              <SectionHeader title="Latency" description="Canonical metric percentiles. Agent-only time is not stored separately." />
               {metrics.latency.status !== "OK" ? (
                 <p className="mt-3 text-sm text-muted">Not enough data.</p>
               ) : (

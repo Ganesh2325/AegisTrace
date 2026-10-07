@@ -59,6 +59,7 @@ function SupportRunWorkspace() {
   const [busy, setBusy] = useState(false);
   const [payload, setPayload] = useState<ExecutionPayload | null>(null);
   const [loadError, setLoadError] = useState<{ status?: number; message: string } | null>(null);
+  const createRequestKey = useRef<string | null>(null);
   const [cancelling, setCancelling] = useState(false);
   const [cancelError, setCancelError] = useState("");
   const [live, setLive] = useState(false);
@@ -183,10 +184,13 @@ function SupportRunWorkspace() {
     setCreateError("");
     setFieldError("");
     try {
-      const body: { question: string; agentId?: string } = { question: trimmed };
+      const requestKey = createRequestKey.current || crypto.randomUUID();
+      createRequestKey.current = requestKey;
+      const body: { question: string; agentId?: string; requestKey: string } = { question: trimmed, requestKey };
       if (agents.length > 1 && agentId) body.agentId = agentId;
       const created = await api<ExecutionPayload>("/api/v1/runs", { method: "POST", body: JSON.stringify(body) });
       if (!created.run?.id) throw new Error("The run was stored without an id.");
+      createRequestKey.current = null;
       setPayload(created);
       toast("success", "Run created");
       router.replace(`/runs/new?run=${created.run.id}`);
@@ -266,7 +270,7 @@ function SupportRunWorkspace() {
               name="question"
               label="Question"
               value={question}
-              onChange={(event) => setQuestion(event.target.value)}
+              onChange={(event) => { createRequestKey.current = null; setQuestion(event.target.value); }}
               onKeyDown={onQuestionKey}
               disabled={busy}
               maxLength={QUESTION_MAX}
@@ -279,7 +283,7 @@ function SupportRunWorkspace() {
               <Button type="submit" loading={busy} loadingLabel="Creating run…" disabled={!question.trim()}>Start run</Button>
             </div>
           </Card>
-          <AgentContext agents={agents} agentId={agentId} onAgentId={setAgentId} environment={environment} error={agentsError} />
+          <AgentContext agents={agents} agentId={agentId} onAgentId={(id) => { createRequestKey.current = null; setAgentId(id); }} environment={environment} error={agentsError} />
         </form>
       )}
 

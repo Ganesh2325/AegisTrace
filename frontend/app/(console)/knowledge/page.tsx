@@ -58,8 +58,8 @@ export default function KnowledgePage() {
   const base = bases[0];
   const processing = docs?.items.some((doc) => doc.status === "UPLOADED" || doc.status === "PROCESSING");
 
-  function load() {
-    api<KnowledgeBase[]>("/api/v1/knowledge-bases").then(async (rows) => {
+  function load(signal?: AbortSignal) {
+    api<KnowledgeBase[]>("/api/v1/knowledge-bases", { signal }).then(async (rows) => {
       setBases(rows);
       const selected = rows[0];
       if (!selected) {
@@ -71,17 +71,23 @@ export default function KnowledgePage() {
       if (status) params.set("status", status);
       if (query.trim()) params.set("q", query.trim());
       const [pageBody, versionRows] = await Promise.all([
-        api<DocumentPage>(`/api/v1/knowledge-bases/${selected.id}/documents?${params}`),
-        api<KnowledgeVersion[]>(`/api/v1/knowledge-bases/${selected.id}/versions`),
+        api<DocumentPage>(`/api/v1/knowledge-bases/${selected.id}/documents?${params}`, { signal }),
+        api<KnowledgeVersion[]>(`/api/v1/knowledge-bases/${selected.id}/versions`, { signal }),
       ]);
       setDocs(pageBody);
       setVersions(versionRows);
       if (!inspectVersion && selected.currentVersionId) setInspectVersion(selected.currentVersionId);
-    }).catch((err) => setError(err.message)).finally(() => setReady(true));
+    }).catch((err) => {
+      if (!(err instanceof DOMException && err.name === "AbortError")) setError(err.message);
+    }).finally(() => {
+      if (!signal?.aborted) setReady(true);
+    });
   }
 
   useEffect(() => {
-    load();
+    const controller = new AbortController();
+    load(controller.signal);
+    return () => controller.abort();
   }, [attempt, page, status]);
 
   useEffect(() => {

@@ -21,6 +21,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 
 @Component
 public class RunEventBus {
+    static final int REPLAY_LIMIT = 200;
     private static final Logger log = LoggerFactory.getLogger(RunEventBus.class);
     private final NamedParameterJdbcTemplate jdbc;
     private final ObjectMapper mapper;
@@ -108,9 +109,12 @@ public class RunEventBus {
 
     private void replay(UUID runId, int after, SseEmitter emitter) {
         var rows = jdbc.query("""
-                select sequence, event_type, state, payload::text as payload, created_at
-                from run_events where run_id = :id and sequence > :after order by sequence
-                """, Map.of("id", runId, "after", after), (rs, n) -> Map.<String, Object>of(
+                select sequence, event_type, state, payload, created_at from (
+                    select sequence, event_type, state, payload::text as payload, created_at
+                    from run_events where run_id = :id and sequence > :after
+                    order by sequence desc limit :limit
+                ) replay order by sequence
+                """, Map.of("id", runId, "after", after, "limit", REPLAY_LIMIT), (rs, n) -> Map.<String, Object>of(
                 "runId", runId,
                 "sequence", rs.getInt("sequence"),
                 "eventType", rs.getString("event_type"),
@@ -180,6 +184,9 @@ public class RunEventBus {
         var list = emitters.get(runId);
         if (list != null) {
             list.remove(emitter);
+            if (list.isEmpty()) {
+                emitters.remove(runId, list);
+            }
         }
     }
 

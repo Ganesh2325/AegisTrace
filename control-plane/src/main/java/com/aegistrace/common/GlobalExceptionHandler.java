@@ -27,19 +27,19 @@ public class GlobalExceptionHandler {
                 .findFirst()
                 .map(err -> err.getField() + " " + err.getDefaultMessage())
                 .orElse("Request validation failed.");
-        return ResponseEntity.badRequest().body(error("VALIDATION_FAILED", message, null));
+        return ResponseEntity.badRequest().body(error("VALIDATION_ERROR", message, null));
     }
 
     @ExceptionHandler(DataAccessException.class)
     public ResponseEntity<ApiError> data(DataAccessException ex) {
         log.error("database_error");
-        return ResponseEntity.status(503).body(error("DEPENDENCY_UNAVAILABLE", "The database is unavailable.", null));
+        return ResponseEntity.status(503).body(error("DATABASE_FAILURE", "The database is unavailable.", null));
     }
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiError> fallback(Exception ex, HttpServletRequest request) {
         log.error("unhandled_error path={}", request.getRequestURI(), ex);
-        return ResponseEntity.internalServerError().body(error("INTERNAL", "The request could not be completed.", null));
+        return ResponseEntity.internalServerError().body(error("INTERNAL_ERROR", "The request could not be completed.", null));
     }
 
     private ApiError error(String code, String message, java.util.UUID runId) {

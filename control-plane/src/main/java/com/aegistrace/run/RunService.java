@@ -13,6 +13,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.tracing.Tracer;
+import jakarta.annotation.PreDestroy;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -44,11 +45,16 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 
 @Service
 public class RunService {
+    static final int EVENT_HISTORY_LIMIT = 200;
     private static final Logger log = LoggerFactory.getLogger(RunService.class);
     private static final TypeReference<Map<String, Object>> MAP = new TypeReference<>() {};
     private final NamedParameterJdbcTemplate jdbc;
@@ -61,11 +67,14 @@ public class RunService {
     private final MeterRegistry meters;
     private final Tracer tracer;
     private final ApprovalService approvals;
-    private final ExecutorService executor = Executors.newFixedThreadPool(8, runnable -> {
-        Thread thread = new Thread(runnable, "aegis-run");
-        thread.setDaemon(true);
-        return thread;
-    });
+    private final Set<UUID> recoverySubmissions = ConcurrentHashMap.newKeySet();
+    private final ThreadPoolExecutor executor = new ThreadPoolExecutor(
+            4, 8, 60, TimeUnit.SECONDS, new ArrayBlockingQueue<>(100),
+            runnable -> {
+                Thread thread = new Thread(runnable, "aegis-run");
+                thread.setDaemon(true);
+                return thread;
+            }, new ThreadPoolExecutor.AbortPolicy());
 
     public RunService(NamedParameterJdbcTemplate jdbc, TransactionTemplate tx, ObjectMapper mapper, AuditService audit,
                       RunEventBus events, RuntimeClient runtime, MeterRegistry meters, ObjectProvider<Tracer> tracer,
@@ -79,15 +88,34 @@ public class RunService {
         this.meters = meters;
         this.tracer = tracer.getIfAvailable(() -> Tracer.NOOP);
         this.approvals = approvals;
+        meters.gauge("aegis.run.executor.queue.depth", executor, pool -> pool.getQueue().size());
+        meters.gauge("aegis.run.executor.active", executor, ThreadPoolExecutor::getActiveCount);
     }
 
-    public Map<String, Object> create(Actor actor, UUID workspaceId, String question, UUID agentId) {
+    public Map<String, Object> create(Actor actor, UUID workspaceId, String question, UUID agentId, String requestKey) {
         if (question == null || question.isBlank() || question.length() > 4000) {
             throw new ApiException("VALIDATION_FAILED", "A question up to 4000 characters is required.", 400);
+        }
+        String idempotencyKey = requestKey == null || requestKey.isBlank() ? null : requestKey.trim();
+        if (idempotencyKey != null && idempotencyKey.length() > 128) {
+            throw new ApiException("VALIDATION_ERROR", "requestKey is limited to 128 characters.", 400);
         }
         var membership = actor.membership(workspaceId);
         if (membership == null) {
             throw new ApiException("FORBIDDEN", "You are not a member of that workspace.", 403);
+        }
+        String storedRequestId = idempotencyKey == null
+                ? (MDC.get("request_id") == null ? UUID.randomUUID().toString() : MDC.get("request_id"))
+                : "client:" + idempotencyKey;
+        if (idempotencyKey != null) {
+            var prior = jdbc.query("""
+                    select id from agent_runs
+                    where workspace_id = :workspace and user_id = :user and request_id = :request
+                    """, Map.of("workspace", workspaceId, "user", actor.id(), "request", storedRequestId),
+                    (rs, n) -> UUID.fromString(rs.getString("id")));
+            if (!prior.isEmpty()) {
+                return execution(actor, workspaceId, prior.get(0));
+            }
         }
         UUID runId = UUID.randomUUID();
         var span = tracer.nextSpan().name("aegistrace.agent.run");
@@ -98,10 +126,25 @@ public class RunService {
         if (traceId == null || traceId.isBlank() || traceId.chars().allMatch(ch -> ch == '0')) {
             traceId = UUID.randomUUID().toString().replace("-", "");
         }
-        String requestId = MDC.get("request_id") == null ? UUID.randomUUID().toString() : MDC.get("request_id");
         String finalTrace = traceId;
         String finalSpan = com.aegistrace.observability.W3cTraceContext.spanId(span.context().spanId());
+        UUID[] existingRun = new UUID[1];
+        boolean[] inserted = {false};
         tx.executeWithoutResult(status -> {
+            if (idempotencyKey != null) {
+                jdbc.query("select pg_advisory_xact_lock(hashtextextended(:key, 0))",
+                        Map.of("key", "run-request:" + workspaceId + ":" + actor.id() + ":" + idempotencyKey),
+                        rs -> null);
+                var existing = jdbc.query("""
+                        select id from agent_runs
+                        where workspace_id = :workspace and user_id = :user and request_id = :request
+                        """, Map.of("workspace", workspaceId, "user", actor.id(), "request", storedRequestId),
+                        (rs, n) -> UUID.fromString(rs.getString("id")));
+                if (!existing.isEmpty()) {
+                    existingRun[0] = existing.get(0);
+                    return;
+                }
+            }
             jdbc.query("select pg_advisory_xact_lock(hashtextextended(:key, 0))",
                     Map.of("key", "run:" + actor.id()), rs -> null);
             Integer limit = jdbc.queryForObject(
@@ -126,7 +169,7 @@ public class RunService {
                     .addValue("knowledgeBaseId", version.knowledgeBaseId())
                     .addValue("knowledgeBaseVersionId", knowledgeVersionId == null || knowledgeVersionId.toString().isBlank()
                             ? null : UUID.fromString(knowledgeVersionId.toString()))
-                    .addValue("requestId", requestId)
+                    .addValue("requestId", storedRequestId)
                     .addValue("traceId", finalTrace)
                     .addValue("spanId", finalSpan)
                     .addValue("question", question.trim())
@@ -143,31 +186,42 @@ public class RunService {
                         :knowledgeBaseVersionId, :requestId, :traceId, :spanId, 'QUEUED', :question, :provider, :model, :snapshot, :timeoutAt
                     )
                     """, params);
+            inserted[0] = true;
             audit.record(workspaceId, actor.id(), "RUN_CREATED", "agent_run", runId.toString(), runId, Map.of(
                     "agentVersionId", version.id().toString()));
             TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
                 @Override
                 public void afterCommit() {
                     var context = MDC.getCopyOfContextMap();
-                    executor.execute(() -> {
-                        if (context != null) {
-                            MDC.setContextMap(context);
-                        }
-                        MDC.put("run_id", runId.toString());
-                        MDC.put("trace_id", finalTrace);
-                        try (Tracer.SpanInScope ignored = tracer.withSpan(span)) {
-                            orchestrate(runId);
-                        } catch (Exception ex) {
-                            log.error("orchestration_failed error_type={}", ex.getClass().getSimpleName());
-                            fail(runId, "INTERNAL", "INTERNAL", "The run failed.");
-                        } finally {
-                            span.end();
-                            MDC.clear();
-                        }
-                    });
+                    try {
+                        executor.execute(() -> {
+                            if (context != null) {
+                                MDC.setContextMap(context);
+                            }
+                            MDC.put("run_id", runId.toString());
+                            MDC.put("trace_id", finalTrace);
+                            try (Tracer.SpanInScope ignored = tracer.withSpan(span)) {
+                                orchestrate(runId);
+                            } catch (Exception ex) {
+                                log.error("orchestration_failed error_type={}", ex.getClass().getSimpleName());
+                                fail(runId, "INTERNAL_ERROR", "INTERNAL_ERROR", "The run failed.");
+                            } finally {
+                                span.end();
+                                MDC.clear();
+                            }
+                        });
+                    } catch (RejectedExecutionException ex) {
+                        span.end();
+                        meters.counter("aegis.queue.rejected", "kind", "run").increment();
+                        fail(runId, "QUEUE_FAILURE", "QUEUE_FAILURE", "Run capacity is temporarily exhausted.");
+                    }
                 }
             });
         });
+        if (!inserted[0]) {
+            span.end();
+            return execution(actor, workspaceId, existingRun[0]);
+        }
         meters.counter("aegis.runs", "result", "started").increment();
         return execution(actor, workspaceId, runId);
     }
@@ -235,19 +289,25 @@ public class RunService {
             TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
                 @Override
                 public void afterCommit() {
-                    executor.execute(() -> {
-                        MDC.put("run_id", runId.toString());
-                        MDC.put("trace_id", finalTrace);
-                        try (Tracer.SpanInScope ignored = tracer.withSpan(root)) {
-                            orchestrate(runId);
-                        } catch (Exception ex) {
-                            log.error("evaluation_orchestration_failed error_type={}", ex.getClass().getSimpleName());
-                            fail(runId, "INTERNAL", "INTERNAL", "The evaluation run failed.");
-                        } finally {
-                            root.end();
-                            MDC.clear();
-                        }
-                    });
+                    try {
+                        executor.execute(() -> {
+                            MDC.put("run_id", runId.toString());
+                            MDC.put("trace_id", finalTrace);
+                            try (Tracer.SpanInScope ignored = tracer.withSpan(root)) {
+                                orchestrate(runId);
+                            } catch (Exception ex) {
+                                log.error("evaluation_orchestration_failed error_type={}", ex.getClass().getSimpleName());
+                                fail(runId, "INTERNAL_ERROR", "INTERNAL_ERROR", "The evaluation run failed.");
+                            } finally {
+                                root.end();
+                                MDC.clear();
+                            }
+                        });
+                    } catch (RejectedExecutionException ex) {
+                        root.end();
+                        meters.counter("aegis.queue.rejected", "kind", "evaluation").increment();
+                        fail(runId, "QUEUE_FAILURE", "QUEUE_FAILURE", "Evaluation capacity is temporarily exhausted.");
+                    }
                 }
             });
         });
@@ -426,6 +486,27 @@ public class RunService {
         enqueueExplicitEvaluation(runId);
     }
 
+    public void recoverQueued(UUID runId) {
+        if (!recoverySubmissions.add(runId)) {
+            return;
+        }
+        try {
+            executor.execute(() -> {
+                try {
+                    orchestrate(runId);
+                } catch (Exception ex) {
+                    log.error("recovered_orchestration_failed run_id={} error_type={}", runId, ex.getClass().getSimpleName());
+                    fail(runId, "INTERNAL_ERROR", "INTERNAL_ERROR", "The recovered run failed.");
+                } finally {
+                    recoverySubmissions.remove(runId);
+                }
+            });
+        } catch (RejectedExecutionException ex) {
+            recoverySubmissions.remove(runId);
+            meters.counter("aegis.queue.rejected", "kind", "recovery").increment();
+        }
+    }
+
     public Map<String, Object> decide(Actor actor, UUID workspaceId, UUID approvalId, boolean approve, String reason) {
         var membership = actor.membership(workspaceId);
         if (membership == null || !ApprovalAccess.canDecide(membership.role())) {
@@ -496,6 +577,16 @@ public class RunService {
                     "select state from agent_runs where id = :id for update", Map.of("id", runId), String.class);
             if (!"APPROVAL_REQUIRED".equals(runState)) {
                 throw new ApiException("CONFLICT", "The run is no longer executable.", 409, runId);
+            }
+            if (approve) {
+                jdbc.update("""
+                        update agent_runs
+                        set timeout_at = now() + (
+                            greatest(1000, coalesce(nullif(snapshot->>'timeoutMs', '')::bigint, 60000))
+                            * interval '1 millisecond'
+                        )
+                        where id = :id
+                        """, Map.of("id", runId));
             }
             String nextStatus = approve ? "APPROVED" : "REJECTED";
             int changed = jdbc.update("""
@@ -595,6 +686,13 @@ public class RunService {
             throw new ApiException("FORBIDDEN", "You cannot cancel this run.", 403);
         }
         tx.executeWithoutResult(status -> {
+            Integer completedSideEffects = jdbc.queryForObject("""
+                    select count(*)::int from tool_executions
+                    where run_id = :id and status = 'SUCCEEDED'
+                    """, Map.of("id", runId), Integer.class);
+            if (completedSideEffects != null && completedSideEffects > 0) {
+                throw new ApiException("CONFLICT", "The run already committed its external side effect.", 409, runId);
+            }
             if (!transition(runId, "CANCELLED")) {
                 throw new ApiException("CONFLICT", "The run is already finished.", 409, runId);
             }
@@ -697,9 +795,11 @@ public class RunService {
     public List<Map<String, Object>> events(Actor actor, UUID workspaceId, UUID runId) {
         ensureVisible(actor, workspaceId, runId);
         return jdbc.query("""
-                select sequence, event_type, state, payload::text as payload, created_at
-                from run_events where run_id = :id order by sequence
-                """, Map.of("id", runId), (rs, n) -> Map.of(
+                select sequence, event_type, state, payload, created_at from (
+                    select sequence, event_type, state, payload::text as payload, created_at
+                    from run_events where run_id = :id order by sequence desc limit :limit
+                ) history order by sequence
+                """, Map.of("id", runId, "limit", EVENT_HISTORY_LIMIT), (rs, n) -> Map.of(
                 "sequence", rs.getInt("sequence"),
                 "eventType", rs.getString("event_type"),
                 "state", rs.getString("state"),
@@ -778,16 +878,27 @@ public class RunService {
             } catch (RuntimeClient.RuntimeCallException ex) {
                 jdbc.update("update agent_runs set orchestration_attempts = orchestration_attempts + 1 where id = :id",
                         Map.of("id", run.id()));
-                events.append(run.id(), "MODEL_COMPLETED", runState(run.id()), Map.of(
-                        "retry", true, "attempt", attempts, "errorType", ex.getCategory()));
-                meters.counter("aegis.job.retries", "kind", "model").increment();
                 boolean expired = Instant.now().isAfter(run.timeoutAt());
-                if (!ex.isRetryable() || attempts >= 3 || expired) {
+                boolean willRetry = ex.isRetryable() && attempts < 3 && !expired;
+                events.append(run.id(), "MODEL_COMPLETED", runState(run.id()), Map.of(
+                        "retry", willRetry, "attempt", attempts, "errorType", ex.getCategory()));
+                if (!willRetry) {
                     fail(run.id(), expired ? "TIMED_OUT" : ex.getCategory(), ex.getCode(), ex.getMessage());
                     return null;
                 }
+                meters.counter("aegis.job.retries", "kind", "model").increment();
                 try {
-                    Thread.sleep(Math.min(60_000L, 1L << attempts) * 1000L);
+                    if (RunStateMachine.isTerminal(runState(run.id()))) {
+                        return null;
+                    }
+                    long ceiling = Math.min(5_000L, 500L * (1L << (attempts - 1)));
+                    long delay = ThreadLocalRandom.current().nextLong(Math.max(1L, ceiling / 2), ceiling + 1);
+                    long remaining = java.time.Duration.between(Instant.now(), run.timeoutAt()).toMillis();
+                    if (remaining <= 0) {
+                        fail(run.id(), "TIMED_OUT", "TIMEOUT", "The runtime retry budget expired.");
+                        return null;
+                    }
+                    Thread.sleep(Math.min(delay, remaining));
                 } catch (InterruptedException interrupted) {
                     Thread.currentThread().interrupt();
                     fail(run.id(), "CANCELLED", "CANCELLED", "The run was interrupted.");
@@ -1305,6 +1416,11 @@ public class RunService {
 
     private record ApprovalRow(String status, String requiredRole, Instant expiresAt, UUID runId, UUID proposalId,
                                UUID requesterId, String toolName, String arguments) {}
+
+    @PreDestroy
+    public void shutdown() {
+        executor.shutdownNow();
+    }
 }
 
 @RestController
@@ -1324,7 +1440,7 @@ class RunController {
     org.springframework.http.ResponseEntity<Map<String, Object>> create(HttpServletRequest request, @RequestBody CreateRun body) {
         var membership = rbac.require(request, "OPERATOR", "ADMIN");
         UUID agentId = body.agentId() == null || body.agentId().isBlank() ? null : UUID.fromString(body.agentId());
-        var run = runs.create(rbac.current(), membership.workspaceId(), body.question(), agentId);
+        var run = runs.create(rbac.current(), membership.workspaceId(), body.question(), agentId, body.requestKey());
         return org.springframework.http.ResponseEntity.status(HttpStatus.ACCEPTED).body(run);
     }
 
@@ -1397,6 +1513,6 @@ class RunController {
         return runs.decide(rbac.current(), membership.workspaceId(), id, false, body == null ? "" : body.reason());
     }
 
-    record CreateRun(String question, String agentId) {}
+    record CreateRun(String question, String agentId, String requestKey) {}
     record Decision(String reason) {}
 }

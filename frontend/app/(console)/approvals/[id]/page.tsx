@@ -36,20 +36,29 @@ export default function ApprovalDetailPage() {
   const [rejectReason, setRejectReason] = useState("");
   const [actionError, setActionError] = useState("");
 
-  function load() {
-    api<ApprovalDetail>(`/api/v1/approvals/${params.id}`)
+  function load(signal?: AbortSignal) {
+    api<ApprovalDetail>(`/api/v1/approvals/${params.id}`, { signal })
       .then((body) => { setError(""); setRow(body); })
-      .catch((err) => setError(err instanceof Error ? err.message : "Unable to load this approval"))
-      .finally(() => setReady(true));
+      .catch((err) => {
+        if (!(err instanceof DOMException && err.name === "AbortError")) {
+          setError(err instanceof Error ? err.message : "Unable to load this approval");
+        }
+      })
+      .finally(() => { if (!signal?.aborted) setReady(true); });
   }
 
-  useEffect(() => { load(); }, [params.id]);
+  useEffect(() => {
+    const controller = new AbortController();
+    load(controller.signal);
+    return () => controller.abort();
+  }, [params.id]);
   useEffect(() => {
     if (!row) return;
     const open = row.status === "PENDING" || (row.status === "APPROVED" && !row.executionStatus);
     if (!open) return;
-    const timer = window.setInterval(load, DETAIL_POLL_MS);
-    return () => window.clearInterval(timer);
+    const controller = new AbortController();
+    const timer = window.setInterval(() => load(controller.signal), DETAIL_POLL_MS);
+    return () => { controller.abort(); window.clearInterval(timer); };
   }, [row?.status, row?.executionStatus, params.id]);
 
   async function decide(approve: boolean) {

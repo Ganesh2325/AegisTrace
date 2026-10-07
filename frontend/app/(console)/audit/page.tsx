@@ -33,7 +33,7 @@ function AuditCenter() {
   const [error, setError] = useState("");
   const [ready, setReady] = useState(false);
 
-  const load = useCallback(() => {
+  const load = useCallback((signal?: AbortSignal) => {
     const query = new URLSearchParams();
     query.set("window", window);
     query.set("page", String(page));
@@ -41,13 +41,21 @@ function AuditCenter() {
       const value = params.get(key);
       if (value) query.set(key, value);
     }
-    api<AuditPage>(`/api/v1/audit?${query}`)
+    api<AuditPage>(`/api/v1/audit?${query}`, { signal })
       .then((row) => { setData(row); setError(""); })
-      .catch((err) => setError(err instanceof Error ? err.message : "Unable to load audit"))
-      .finally(() => setReady(true));
+      .catch((err) => {
+        if (!(err instanceof DOMException && err.name === "AbortError")) {
+          setError(err instanceof Error ? err.message : "Unable to load audit");
+        }
+      })
+      .finally(() => { if (!signal?.aborted) setReady(true); });
   }, [window, page, params]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    const controller = new AbortController();
+    load(controller.signal);
+    return () => controller.abort();
+  }, [load]);
 
   function apply(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -101,7 +109,7 @@ function AuditCenter() {
         <TextField name="approvalId" label="Approval ID" defaultValue={params.get("approvalId") || ""} />
         <div className="md:col-span-4"><Button type="submit" variant="secondary">Filter</Button></div>
       </form>
-      {error && <ErrorState title="Unable to load audit" onRetry={load}>{error}</ErrorState>}
+      {error && <ErrorState title="Unable to load audit" onRetry={() => load()}>{error}</ErrorState>}
       {!ready && !error && <Skeleton className="h-24" />}
       {data && (
         <>

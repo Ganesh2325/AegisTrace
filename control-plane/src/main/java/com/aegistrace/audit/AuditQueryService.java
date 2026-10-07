@@ -17,6 +17,7 @@ import java.util.UUID;
 @Service
 public class AuditQueryService {
     static final int PAGE_SIZE = 25;
+    static final int MAX_FILTER_LENGTH = 200;
 
     private final NamedParameterJdbcTemplate jdbc;
     private final ObjectMapper mapper;
@@ -28,6 +29,7 @@ public class AuditQueryService {
 
     public Map<String, Object> list(UUID workspaceId, String windowCode, String action, String actor, String resourceType,
                                     String result, String runId, String approvalId, String q, int page) {
+        validateFilters(action, actor, resourceType, result, runId, approvalId, q);
         MetricsCalculator.Window window = parseWindow(windowCode);
         MapSqlParameterSource params = new MapSqlParameterSource().addValue("workspace", workspaceId);
         StringBuilder where = new StringBuilder(" where e.workspace_id = :workspace ");
@@ -186,6 +188,14 @@ public class AuditQueryService {
 
     private static boolean notBlank(String value) {
         return value != null && !value.isBlank();
+    }
+
+    private static void validateFilters(String... values) {
+        for (String value : values) {
+            if (value != null && value.length() > MAX_FILTER_LENGTH) {
+                throw new ApiException("VALIDATION_ERROR", "Audit filters are limited to 200 characters.", 400);
+            }
+        }
     }
 
     private static long number(Object value) {

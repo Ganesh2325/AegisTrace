@@ -22,7 +22,7 @@ from aegislib.chunking import chunk_pages, normalize_text
 from aegislib.embedding import MODEL_ID, embed, to_pgvector
 from aegislib.execution import ExecutionError, execute_ticket
 from aegislib.evaluation import evaluate_product_run
-from aegislib.retries import backoff_seconds, classify_retry
+from aegislib.retries import classify_retry, jittered_backoff_seconds
 from aegislib.telemetry import configure, consumer_context, current_traceparent, span
 
 configure("worker")
@@ -32,6 +32,8 @@ TOKEN = os.environ.get("AEGIS_INTERNAL_TOKEN", "")
 CONTROL_PLANE = os.environ.get("CONTROL_PLANE_URL", "http://control-plane:8080")
 SEED_DIR = Path(os.environ.get("SEED_DIR", "/seed"))
 WORKER = f"{socket.gethostname()}-{os.getpid()}"
+LEASE_SECONDS = max(15, int(os.environ.get("WORKER_LEASE_SECONDS", "60")))
+MAX_DOCUMENT_BYTES = 10 * 1024 * 1024
 
 
 def main() -> None:
@@ -52,29 +54,47 @@ def main() -> None:
         if job is None:
             time.sleep(0.5)
             continue
+        lease_stop = threading.Event()
+        lease_thread = threading.Thread(target=renew_lease, args=(job["id"], lease_stop), daemon=True)
+        lease_thread.start()
         try:
             process(job)
-            finish(job["id"], "SUCCEEDED", None)
+            if not finish(job["id"], "SUCCEEDED", None):
+                print(f"job_completion_ignored lease_lost job_id={job['id']}")
         except ExecutionError as exc:
             fail(job, exc.error_type, str(exc), exc.retryable)
         except Exception as exc:
             retryable = classify_retry(exc.__class__.__name__)
             fail(job, exc.__class__.__name__, str(exc)[:500], retryable)
+        finally:
+            lease_stop.set()
+            lease_thread.join(timeout=2)
 
 
 def _health() -> None:
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
-            ok = self.path in {"/liveness", "/readiness", "/health"}
-            self.send_response(200 if ok else 404)
+            known = self.path in {"/liveness", "/readiness", "/health"}
+            ok = known and (self.path == "/liveness" or database_ready())
+            self.send_response(200 if ok else (503 if known else 404))
             self.send_header("Content-Type", "application/json")
             self.end_headers()
-            self.wfile.write(b'{"status":"UP","service":"worker"}' if ok else b"{}")
+            status = b'{"status":"UP","service":"worker"}' if ok else b'{"status":"DOWN","service":"worker","dependency":"postgres"}'
+            self.wfile.write(status if known else b"{}")
 
         def log_message(self, fmt, *args):
             return
 
     ThreadingHTTPServer(("0.0.0.0", 8091), Handler).serve_forever()
+
+
+def database_ready() -> bool:
+    try:
+        with psycopg.connect(DATABASE_URL, connect_timeout=1) as conn:
+            conn.execute("select 1")
+        return True
+    except Exception:
+        return False
 
 
 def wait_for_db() -> None:
@@ -104,34 +124,67 @@ def claim():
                 limit 1
             )
             update jobs j
-            set status = 'RUNNING', locked_by = %s, locked_until = now() + interval '60 seconds',
+            set status = 'RUNNING', locked_by = %s,
+                locked_until = now() + (%s || ' seconds')::interval,
                 attempts = attempts + 1, updated_at = now()
             from next
             where j.id = next.id
             returning j.*
             """,
-            (WORKER,),
+            (WORKER, str(LEASE_SECONDS)),
         ).fetchone()
         conn.commit()
         return row
 
 
-def finish(job_id, status: str, error: str | None) -> None:
+def renew_lease(job_id, stop: threading.Event) -> None:
+    interval = max(5.0, LEASE_SECONDS / 3.0)
+    while not stop.wait(interval):
+        try:
+            with connect() as conn:
+                result = conn.execute(
+                    """
+                    update jobs set locked_until = now() + (%s || ' seconds')::interval, updated_at = now()
+                    where id = %s and status = 'RUNNING' and locked_by = %s
+                    """,
+                    (str(LEASE_SECONDS), job_id, WORKER),
+                )
+                conn.commit()
+                if result.rowcount != 1:
+                    print(f"job_lease_lost job_id={job_id}")
+                    return
+        except Exception as exc:
+            print(f"job_lease_renewal_failed job_id={job_id} error_type={exc.__class__.__name__}")
+
+
+def finish(job_id, status: str, error: str | None) -> bool:
     with connect() as conn:
-        conn.execute(
+        result = conn.execute(
             """
             update jobs set status = %s, locked_by = null, locked_until = null, last_error = %s, updated_at = now()
-            where id = %s
+            where id = %s and status = 'RUNNING' and locked_by = %s
             """,
-            (status, error, job_id),
+            (status, error, job_id, WORKER),
         )
         conn.commit()
+        return result.rowcount == 1
 
 
 def fail(job, error_type: str, message: str, retryable: bool) -> None:
-    attempt = int(job["attempts"])
-    terminal = not retryable or attempt >= int(job["max_attempts"])
     with connect() as conn:
+        owned = conn.execute(
+            """
+            select attempts, max_attempts from jobs
+            where id = %s and status = 'RUNNING' and locked_by = %s
+            for update
+            """,
+            (job["id"], WORKER),
+        ).fetchone()
+        if owned is None:
+            print(f"job_failure_ignored lease_lost job_id={job['id']}")
+            return
+        attempt = int(owned["attempts"])
+        terminal = not retryable or attempt >= int(owned["max_attempts"])
         conn.execute(
             """
             insert into job_attempts (id, job_id, attempt, error_type, error_message, retryable)
@@ -146,7 +199,7 @@ def fail(job, error_type: str, message: str, retryable: bool) -> None:
                     next_run_at = now() + (%s || ' seconds')::interval, last_error = %s, updated_at = now()
                 where id = %s
                 """,
-                (str(backoff_seconds(attempt)), f"{error_type}: {message}", job["id"]),
+                (str(jittered_backoff_seconds(attempt)), f"{error_type}: {message}", job["id"]),
             )
         else:
             conn.execute(
@@ -182,6 +235,34 @@ def fail(job, error_type: str, message: str, retryable: bool) -> None:
                 })
         except Exception as callback_error:
             print(f"evaluation_failure_callback_failed {callback_error.__class__.__name__}")
+            enqueue_failure_callback(job, error_type)
+
+
+def enqueue_failure_callback(job, error_type: str) -> None:
+    payload = job["payload"] if isinstance(job["payload"], dict) else json.loads(job["payload"])
+    if job["job_type"] == "EVALUATE_CASE":
+        callback_type = "REPORT_EVALUATION_CASE_FAILURE"
+    elif job["job_type"] == "START_EVALUATION":
+        callback_type = "REPORT_EVALUATION_FAILURE"
+    else:
+        return
+    callback_payload = {**payload, "errorType": error_type}
+    try:
+        with connect() as conn:
+            conn.execute(
+                """
+                insert into jobs (id, workspace_id, job_type, payload, status, max_attempts, idempotency_key)
+                values (%s, %s, %s, %s::jsonb, 'PENDING', 10, %s)
+                on conflict (idempotency_key) do nothing
+                """,
+                (
+                    str(uuid.uuid4()), job["workspace_id"], callback_type, json.dumps(callback_payload),
+                    f"failure-callback:{job['id']}",
+                ),
+            )
+            conn.commit()
+    except Exception as enqueue_error:
+        print(f"evaluation_failure_callback_enqueue_failed {enqueue_error.__class__.__name__}")
 
 
 def process(job) -> None:
@@ -218,8 +299,31 @@ def process(job) -> None:
             internal_post(f"/internal/evaluations/{payload['evaluationExecutionId']}/dispatch", {})
         elif job["job_type"] == "EVALUATE_CASE":
             evaluate_case(payload["runId"], payload["evaluationResultId"])
+        elif job["job_type"] == "REPORT_EVALUATION_CASE_FAILURE":
+            internal_post(f"/internal/evaluation-results/{payload['evaluationResultId']}/complete", {
+                "status": "ERROR",
+                "score": None,
+                "failureCategory": payload["errorType"],
+                "explanation": "Evaluation infrastructure exhausted its retry budget.",
+                "checks": [{
+                    "key": "infrastructure.worker",
+                    "status": "ERROR",
+                    "score": None,
+                    "failureCategory": payload["errorType"],
+                    "explanation": "Evaluation infrastructure exhausted its retry budget.",
+                    "evidence": {"errorType": payload["errorType"]},
+                }],
+                "signals": [],
+            })
+        elif job["job_type"] == "REPORT_EVALUATION_FAILURE":
+            internal_post(f"/internal/evaluations/{payload['evaluationExecutionId']}/failed", {
+                "errorType": payload["errorType"],
+            })
         elif job["job_type"] == "SIMULATE":
             mode = payload.get("mode")
+            if mode == "slow_success":
+                time.sleep(min(30, max(1, int(payload.get("seconds", 20)))))
+                return
             if mode == "ticket_400":
                 raise ExecutionError("TICKET_400", "Simulated invalid ticket.", False)
             if mode in {"ticket_500", "ticket_timeout", "crash_before_insert"}:
@@ -365,7 +469,15 @@ def read_document_text(doc) -> str:
 def download(key: str) -> bytes:
     client = s3()
     obj = client.get_object(Bucket=os.environ.get("S3_BUCKET", "aegistrace-documents"), Key=key)
-    return obj["Body"].read()
+    content_length = int(obj.get("ContentLength") or 0)
+    if content_length > MAX_DOCUMENT_BYTES:
+        obj["Body"].close()
+        raise ExecutionError("PAYLOAD_TOO_LARGE", "Stored document exceeds the 10 MB processing limit.", False)
+    data = obj["Body"].read(MAX_DOCUMENT_BYTES + 1)
+    obj["Body"].close()
+    if len(data) > MAX_DOCUMENT_BYTES:
+        raise ExecutionError("PAYLOAD_TOO_LARGE", "Stored document exceeds the 10 MB processing limit.", False)
+    return data
 
 
 def s3():
@@ -375,7 +487,12 @@ def s3():
         aws_access_key_id=os.environ.get("S3_ACCESS_KEY"),
         aws_secret_access_key=os.environ.get("S3_SECRET_KEY"),
         region_name=os.environ.get("S3_REGION", "us-east-1"),
-        config=Config(s3={"addressing_style": "path"}),
+        config=Config(
+            s3={"addressing_style": "path"},
+            connect_timeout=3,
+            read_timeout=15,
+            retries={"total_max_attempts": 3, "mode": "standard"},
+        ),
     )
 
 

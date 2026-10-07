@@ -70,6 +70,13 @@ public final class MetricsCalculator {
 
     public record ApprovalSample(String status, Double waitMs) {}
 
+    public record RunAggregate(long runs, long active, long waiting, long terminal, long completed, long failed,
+                               long timedOut, long cancelled, long tokens, BigDecimal cost, long validDurations,
+                               long invalidDurations, Double p50, Double p95, Double p99,
+                               java.util.Set<String> models) {}
+
+    public record WaitAggregate(long samples, long invalid, Double meanMs) {}
+
     public static Map<String, Object> summarize(List<RunSample> runs, List<ApprovalSample> approvals,
                                                 long openJobs, long policyDenials, long policyDecisions,
                                                 long evaluations, long evaluationPasses) {
@@ -144,6 +151,38 @@ public final class MetricsCalculator {
         return body;
     }
 
+    public static Map<String, Object> summarizeAggregates(
+            RunAggregate runs, Map<String, WaitAggregate> waits, long pendingApprovals,
+            long openJobs, long policyDenials, long policyDecisions,
+            long evaluations, long evaluationPasses, Window window) {
+        Window resolved = window == null ? Window.allTime() : window;
+        var body = new LinkedHashMap<String, Object>();
+        body.put("window", resolved.code());
+        body.put("windowHours", resolved.hours());
+        body.put("timezone", "UTC");
+        body.put("windowStart", resolved.start() == null ? null : resolved.start().toString());
+        body.put("windowEnd", resolved.end().toString());
+        body.put("runs", count(runs.runs(), "Runs stored in this workspace, any state."));
+        body.put("inProgress", count(runs.active() + runs.waiting(), "Active runs plus runs waiting for approval."));
+        body.put("terminalRuns", count(runs.terminal(), "COMPLETED, FAILED, CANCELLED, and TIMED_OUT."));
+        body.put("completed", count(runs.completed(), "Terminal runs in COMPLETED."));
+        body.put("failed", count(runs.failed(), "Terminal runs in FAILED. Timeouts are separate."));
+        body.put("timedOut", count(runs.timedOut(), "Terminal runs in TIMED_OUT."));
+        body.put("cancelled", count(runs.cancelled(), "Terminal runs in CANCELLED. Not counted as failures."));
+        body.put("completion", rate(runs.completed(), runs.terminal(), "COMPLETED / terminal runs"));
+        body.put("failure", rate(runs.failed() + runs.timedOut(), runs.terminal(), "(FAILED + TIMED_OUT) / terminal runs"));
+        body.put("latency", latencyAggregate(runs));
+        body.put("approvalWait", approvalWaitAggregate(waits));
+        body.put("pendingApprovals", count(pendingApprovals, "Approvals still PENDING in this workspace."));
+        body.put("policyDenial", policy(policyDenials, policyDecisions));
+        body.put("tokens", tokens(runs.tokens(), Math.toIntExact(Math.min(Integer.MAX_VALUE, runs.runs()))));
+        body.put("cost", cost(Math.toIntExact(Math.min(Integer.MAX_VALUE, runs.runs())),
+                runs.tokens(), runs.cost(), runs.models()));
+        body.put("queueDepth", queue(openJobs));
+        body.put("evaluations", evaluations(evaluations, evaluationPasses));
+        return body;
+    }
+
     /**
      * PostgreSQL {@code percentile_cont}: position {@code 1 + p * (n - 1)} on the
      * ordered sample, with linear interpolation between neighbors. One-based.
@@ -189,6 +228,24 @@ public final class MetricsCalculator {
         return body;
     }
 
+    private static Map<String, Object> latencyAggregate(RunAggregate runs) {
+        var body = new LinkedHashMap<String, Object>();
+        body.put("status", runs.validDurations() == 0 ? "NO_DATA" : "OK");
+        body.put("definition", "percentile_cont of ended_at - started_at for terminal runs with a valid duration. "
+                + "End-to-end wall-clock for this workspace in the selected window, including human approval wait. "
+                + "When the window is ALL_TIME the sample is every valid terminal duration. "
+                + "Agent execution time is not stored separately, so it is not reported.");
+        body.put("unit", "ms");
+        body.put("sampleCount", runs.validDurations());
+        body.put("invalidDurationCount", runs.invalidDurations());
+        body.put("p50Ms", runs.p50());
+        body.put("p95Ms", runs.p95());
+        body.put("p99Ms", runs.p99());
+        body.put("attentionMs", LATENCY_ATTENTION_MS);
+        body.put("high", runs.p95() != null && runs.p95() >= LATENCY_ATTENTION_MS);
+        return body;
+    }
+
     private static Map<String, Object> approvalWait(List<ApprovalSample> approvals) {
         var approved = waits(approvals, "APPROVED");
         var rejected = waits(approvals, "REJECTED");
@@ -200,6 +257,27 @@ public final class MetricsCalculator {
         body.put("approved", approved);
         body.put("rejected", rejected);
         body.put("expired", expired);
+        return body;
+    }
+
+    private static Map<String, Object> approvalWaitAggregate(Map<String, WaitAggregate> waits) {
+        var body = new LinkedHashMap<String, Object>();
+        body.put("primary", "approved");
+        body.put("definition", "Mean of decided_at - requested_at for APPROVED approvals in this workspace. "
+                + "PENDING and CANCELLED are excluded. REJECTED and EXPIRED are reported separately and are not averaged in.");
+        body.put("approved", waitMap(waits.get("APPROVED")));
+        body.put("rejected", waitMap(waits.get("REJECTED")));
+        body.put("expired", waitMap(waits.get("EXPIRED")));
+        return body;
+    }
+
+    private static Map<String, Object> waitMap(WaitAggregate value) {
+        WaitAggregate wait = value == null ? new WaitAggregate(0, 0, null) : value;
+        var body = new LinkedHashMap<String, Object>();
+        body.put("status", wait.samples() == 0 ? "NO_DATA" : "OK");
+        body.put("valueMs", wait.samples() == 0 ? null : wait.meanMs());
+        body.put("sampleCount", wait.samples());
+        body.put("invalidCount", wait.invalid());
         return body;
     }
 

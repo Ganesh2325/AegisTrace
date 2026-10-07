@@ -31,7 +31,10 @@ def execute_ticket(conn, job: dict[str, Any], simulate: str | None = None) -> di
     arguments = payload["arguments"]
 
     with conn.cursor() as cur:
-        cur.execute("select state from agent_runs where id = %s", (run_id,))
+        # Serialize cancellation with the external side effect. A cancellation
+        # that commits first makes this job skip; a committed ticket makes the
+        # later cancellation report a conflict instead of hiding the side effect.
+        cur.execute("select state from agent_runs where id = %s for update", (run_id,))
         run = cur.fetchone()
         if run is None:
             raise ExecutionError("INTERNAL", "Run does not exist.", False)

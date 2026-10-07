@@ -31,17 +31,28 @@ export default function EvaluationDetailPage() {
   const [error, setError] = useState("");
   const [cancelling, setCancelling] = useState(false);
   const inflight = useRef(false);
-  const load = useCallback(async () => {
+  const request = useRef<AbortController | null>(null);
+  const load = useCallback(async (signal?: AbortSignal) => {
     if (inflight.current) return;
     inflight.current = true;
-    try { setData(await api<Detail>(`/api/v1/evaluation/runs/${id}`)); setError(""); }
-    catch (err) { setError(err instanceof Error ? err.message : "Unable to load evaluation"); }
+    try { setData(await api<Detail>(`/api/v1/evaluation/runs/${id}`, { signal })); setError(""); }
+    catch (err) {
+      if (!(err instanceof DOMException && err.name === "AbortError")) {
+        setError(err instanceof Error ? err.message : "Unable to load evaluation");
+      }
+    }
     finally { inflight.current = false; }
   }, [id]);
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    const controller = new AbortController();
+    request.current = controller;
+    inflight.current = false;
+    void load(controller.signal);
+    return () => controller.abort();
+  }, [load]);
   useEffect(() => {
     if (!data || !isExecutionActive(data.status)) return;
-    const timer = window.setInterval(() => void load(), 2500);
+    const timer = window.setInterval(() => void load(request.current?.signal), 2500);
     return () => window.clearInterval(timer);
   }, [data, load]);
 

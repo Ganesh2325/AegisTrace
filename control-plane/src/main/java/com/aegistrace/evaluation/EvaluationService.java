@@ -19,6 +19,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -569,9 +570,29 @@ public class EvaluationService {
             row.put("category", rs.getString("category"));
             row.put("startedAt", instant(rs, "started_at"));
             row.put("completedAt", instant(rs, "completed_at"));
-            row.put("checks", checks(resultId));
             return row;
         });
+        Map<UUID, List<Map<String, Object>>> checksByResult = new HashMap<>();
+        jdbc.query("""
+                select c.result_id, c.check_key, c.status, c.score, c.failure_category,
+                       c.explanation, c.evidence::text as evidence
+                from evaluation_checks c
+                join evaluation_results r on r.id = c.result_id
+                where r.execution_id = :id
+                order by c.result_id, c.check_key
+                """, Map.of("id", id), rs -> {
+            UUID resultId = UUID.fromString(rs.getString("result_id"));
+            var check = new LinkedHashMap<String, Object>();
+            check.put("key", rs.getString("check_key"));
+            check.put("status", rs.getString("status"));
+            check.put("score", rs.getBigDecimal("score"));
+            check.put("failureCategory", rs.getString("failure_category"));
+            check.put("explanation", rs.getString("explanation"));
+            check.put("evidence", Jsons.map(mapper, rs.getString("evidence")));
+            checksByResult.computeIfAbsent(resultId, ignored -> new ArrayList<>()).add(check);
+        });
+        resultRows.forEach(row -> row.put("checks",
+                checksByResult.getOrDefault((UUID) row.get("id"), List.of())));
         body.put("results", resultRows);
         body.put("progress", Map.of(
                 "completed", resultRows.stream().filter(r -> RESULT_TERMINAL.contains(String.valueOf(r.get("status")))).count(),
@@ -627,25 +648,37 @@ public class EvaluationService {
     }
 
     public Map<String, Object> cancel(Actor actor, UUID workspaceId, UUID id) {
-        List<UUID> productRuns = jdbc.query("""
-                select r.product_run_id from evaluation_results r
-                join evaluation_executions e on e.id = r.execution_id
-                where e.id = :id and e.workspace_id = :workspace and r.product_run_id is not null
-                  and r.status in ('QUEUED','RUNNING')
-                """, Map.of("id", id, "workspace", workspaceId),
-                (rs, n) -> UUID.fromString(rs.getString("product_run_id")));
-        int changed = jdbc.update("""
-                update evaluation_executions set status = 'CANCELLED', completed_at = now()
-                where id = :id and workspace_id = :workspace and status in ('QUEUED','RUNNING')
-                """, Map.of("id", id, "workspace", workspaceId));
-        if (changed == 0) throw new ApiException("CONFLICT", "The evaluation is already finished.", 409);
+        List<UUID> productRuns = tx.execute(status -> {
+            var states = jdbc.query("""
+                    select status from evaluation_executions
+                    where id = :id and workspace_id = :workspace for update
+                    """, Map.of("id", id, "workspace", workspaceId), (rs, n) -> rs.getString("status"));
+            if (states.isEmpty()) {
+                throw new ApiException("NOT_FOUND", "Evaluation execution not found.", 404);
+            }
+            if (EXECUTION_TERMINAL.contains(states.get(0))) {
+                throw new ApiException("CONFLICT", "The evaluation is already finished.", 409);
+            }
+            List<UUID> runsToCancel = jdbc.query("""
+                    select product_run_id from evaluation_results
+                    where execution_id = :id and product_run_id is not null
+                      and status in ('QUEUED','RUNNING')
+                    for update
+                    """, Map.of("id", id), (rs, n) -> UUID.fromString(rs.getString("product_run_id")));
+            jdbc.update("""
+                    update evaluation_executions set status = 'CANCELLED', completed_at = now()
+                    where id = :id
+                    """, Map.of("id", id));
+            jdbc.update("""
+                    update evaluation_results set status = 'CANCELLED', completed_at = now(),
+                        explanation = 'Evaluation execution was cancelled.'
+                    where execution_id = :id and status in ('QUEUED','RUNNING')
+                    """, Map.of("id", id));
+            audit.record(workspaceId, actor.id(), "EVALUATION_EXECUTION_CANCELLED",
+                    "evaluation_execution", id.toString(), null, Map.of());
+            return runsToCancel;
+        });
         productRuns.forEach(runs::cancelEvaluationRun);
-        jdbc.update("""
-                update evaluation_results set status = 'CANCELLED', completed_at = now(),
-                    explanation = 'Evaluation execution was cancelled.'
-                where execution_id = :id and status in ('QUEUED','RUNNING')
-                """, Map.of("id", id));
-        audit.record(workspaceId, actor.id(), "EVALUATION_EXECUTION_CANCELLED", "evaluation_execution", id.toString(), null, Map.of());
         return execution(actor, workspaceId, id);
     }
 
@@ -793,22 +826,6 @@ public class EvaluationService {
             throw new ApiException("VALIDATION_FAILED", "Knowledge version must belong to the agent version's knowledge base.", 400);
         }
         return targets.get(0);
-    }
-
-    private List<Map<String, Object>> checks(UUID resultId) {
-        return jdbc.query("""
-                select check_key, status, score, failure_category, explanation, evidence::text as evidence
-                from evaluation_checks where result_id = :id order by check_key
-                """, Map.of("id", resultId), (rs, n) -> {
-            var row = new LinkedHashMap<String, Object>();
-            row.put("key", rs.getString("check_key"));
-            row.put("status", rs.getString("status"));
-            row.put("score", rs.getBigDecimal("score"));
-            row.put("failureCategory", rs.getString("failure_category"));
-            row.put("explanation", rs.getString("explanation"));
-            row.put("evidence", Jsons.map(mapper, rs.getString("evidence")));
-            return row;
-        });
     }
 
     private Map<String, Object> comparisonHeader(UUID workspaceId, UUID id) {

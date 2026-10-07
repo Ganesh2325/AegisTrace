@@ -18,6 +18,12 @@ spring:
     hikari:
       maximum-pool-size: 10
       minimum-idle: 2
+      connection-timeout: 3000
+      validation-timeout: 2000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+      leak-detection-threshold: 20000
+      connection-init-sql: SET statement_timeout TO 15000
   flyway:
     enabled: true
   jackson:

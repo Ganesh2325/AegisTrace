@@ -5,6 +5,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import org.junit.jupiter.api.Test;
 
@@ -111,6 +112,28 @@ class MetricsCalculatorTest {
         assertEquals(2, ((Number) latency.get("sampleCount")).intValue());
         assertEquals(3L, ((Number) latency.get("invalidDurationCount")).longValue());
         assertEquals(2000d, ((Number) latency.get("p50Ms")).doubleValue(), 0.001);
+    }
+
+    @Test
+    void aggregateSummaryPreservesCanonicalMetricSemantics() {
+        var window = MetricsCalculator.Window.rollingHours(24, Instant.parse("2026-10-07T12:00:00Z"));
+        var aggregate = new MetricsCalculator.RunAggregate(
+                6, 1, 1, 4, 2, 1, 1, 0, 42, new BigDecimal("0.25"),
+                3, 1, 1000d, 3000d, 3800d, Set.of("gpt-4o-mini"));
+        var waits = Map.of(
+                "APPROVED", new MetricsCalculator.WaitAggregate(2, 1, 2500d),
+                "REJECTED", new MetricsCalculator.WaitAggregate(1, 0, 1000d));
+        var summary = MetricsCalculator.summarizeAggregates(
+                aggregate, waits, 1, 3, 1, 4, 2, 1, window);
+
+        assertEquals(6L, count(summary, "runs"));
+        assertEquals(2L, count(summary, "inProgress"));
+        assertEquals(0.5d, rate(summary, "completion"));
+        assertEquals(0.5d, rate(summary, "failure"));
+        assertEquals(3000d, ((Number) latency(summary).get("p95Ms")).doubleValue());
+        assertEquals(1L, count(summary, "pendingApprovals"));
+        assertEquals(2500d, ((Number) group(approval(summary), "approved").get("valueMs")).doubleValue());
+        assertEquals("PRICED", group(summary, "cost").get("pricingStatus"));
     }
 
     @Test

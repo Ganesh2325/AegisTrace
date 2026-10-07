@@ -57,7 +57,7 @@ public class JobMaintenance {
     }
 
     private void reapJobs() {
-        jdbc.update("""
+        int reaped = jdbc.update("""
                 update jobs set
                     status = case when attempts >= max_attempts then 'DEAD' else 'RETRY' end,
                     locked_by = null,
@@ -67,6 +67,9 @@ public class JobMaintenance {
                     last_error = coalesce(last_error, 'lease expired')
                 where status = 'RUNNING' and locked_until < now()
                 """, Map.of());
+        if (reaped > 0) {
+            meters.counter("aegis.job.lease.expired").increment(reaped);
+        }
     }
 
     private void expireApprovals() {
@@ -87,6 +90,7 @@ public class JobMaintenance {
                 if (updated == 0) {
                     return;
                 }
+                meters.counter("aegis.approval.expired").increment();
                 events.append(row[1], "APPROVAL_EXPIRED", "APPROVAL_REQUIRED", Map.of("approvalId", row[0]));
                 audit.record(row[2], null, "APPROVAL_EXPIRED", "approval", row[0].toString(), row[1], Map.of());
                 String state = jdbc.queryForObject("select state from agent_runs where id = :id for update", Map.of("id", row[1]), String.class);
@@ -120,6 +124,7 @@ public class JobMaintenance {
                         where id = :id and state = :state
                         """, new MapSqlParameterSource().addValue("id", id).addValue("state", row[1]));
                 if (updated == 1) {
+                    meters.counter("aegis.timeout", "kind", "run").increment();
                     var pending = jdbc.query(
                             "select id, workspace_id from approvals where run_id = :id and status = 'PENDING'",
                             Map.of("id", id), (rs, n) -> new UUID[]{

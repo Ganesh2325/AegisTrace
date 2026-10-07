@@ -43,29 +43,36 @@ function Dashboard() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const inflight = useRef(false);
+  const request = useRef<AbortController | null>(null);
 
   const load = useCallback(async (background: boolean) => {
-    if (inflight.current) return;
-    inflight.current = true;
+    request.current?.abort();
+    const controller = new AbortController();
+    request.current = controller;
     if (background) setRefreshing(true);
     else setLoading(true);
     try {
       const query = new URLSearchParams({ window, status, page: String(page) });
-      const row = await api<OperationsOverview>(`/api/v1/operations/overview?${query}`);
+      const row = await api<OperationsOverview>(`/api/v1/operations/overview?${query}`, { signal: controller.signal });
       setOverview(row);
       setError("");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to load operations");
-      if (!background) setOverview(null);
+      if (!(err instanceof DOMException && err.name === "AbortError")) {
+        setError(err instanceof Error ? err.message : "Unable to load operations");
+        if (!background) setOverview(null);
+      }
     } finally {
-      inflight.current = false;
-      setLoading(false);
-      setRefreshing(false);
+      if (request.current === controller) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   }, [window, status, page]);
 
-  useEffect(() => { void load(false); }, [load]);
+  useEffect(() => {
+    void load(false);
+    return () => request.current?.abort();
+  }, [load]);
 
   function setQuery(next: { range?: WindowCode; status?: RunFilter; page?: number }) {
     const search = new URLSearchParams(params.toString());

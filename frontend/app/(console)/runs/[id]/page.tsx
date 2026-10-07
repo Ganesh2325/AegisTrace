@@ -33,20 +33,36 @@ export default function RunDetail() {
 
   useEffect(() => {
     let stop = false;
-    const load = () => api<Run>(`/api/v1/runs/${params.id}`).then((row) => { if (!stop) setRun(row); }).catch((err) => setError(err.message));
+    let runLoading = false;
+    let timelineLoading = false;
+    const controller = new AbortController();
+    const load = () => {
+      if (runLoading) return;
+      runLoading = true;
+      api<Run>(`/api/v1/runs/${params.id}`, { signal: controller.signal })
+        .then((row) => { if (!stop) { setRun(row); setError(""); } })
+        .catch((err) => { if (!stop && err?.name !== "AbortError") setError(err.message); })
+        .finally(() => { runLoading = false; });
+    };
+    const loadTimeline = () => {
+      if (timelineLoading) return;
+      timelineLoading = true;
+      api<EventRow[]>(`/api/v1/runs/${params.id}/timeline`, { signal: controller.signal })
+        .then((rows) => { if (!stop) setEvents(rows); })
+        .catch(() => undefined)
+        .finally(() => { timelineLoading = false; });
+    };
+    const refresh = () => { load(); loadTimeline(); };
     load();
     const source = new EventSource(`${apiBase}/api/v1/runs/${params.id}/events`, { withCredentials: true });
-    source.onmessage = () => load();
-    source.addEventListener("RUN_STARTED", () => load());
+    source.onmessage = refresh;
+    source.addEventListener("RUN_STARTED", refresh);
     ["RETRIEVAL_COMPLETED", "MODEL_COMPLETED", "TOOL_PROPOSED", "POLICY_DECIDED", "APPROVAL_REQUIRED", "APPROVAL_APPROVED", "APPROVAL_REJECTED", "TOOL_COMPLETED", "RUN_COMPLETED", "RUN_FAILED", "RUN_CANCELLED", "RUN_TIMED_OUT"].forEach((name) => {
-      source.addEventListener(name, () => load());
+      source.addEventListener(name, refresh);
     });
-    const poll = window.setInterval(load, 2500);
-    api<EventRow[]>(`/api/v1/runs/${params.id}/timeline`).then(setEvents).catch(() => undefined);
-    const timelinePoll = window.setInterval(() => {
-      api<EventRow[]>(`/api/v1/runs/${params.id}/timeline`).then(setEvents).catch(() => undefined);
-    }, 2500);
-    return () => { stop = true; source.close(); window.clearInterval(poll); window.clearInterval(timelinePoll); };
+    const poll = window.setInterval(refresh, 10_000);
+    loadTimeline();
+    return () => { stop = true; controller.abort(); source.close(); window.clearInterval(poll); };
   }, [params.id]);
 
   if (error) return <ErrorState title="Unable to load this run">{error}</ErrorState>;
