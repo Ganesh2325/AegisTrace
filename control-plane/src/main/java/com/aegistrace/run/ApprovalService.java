@@ -68,11 +68,15 @@ public class ApprovalService {
                        t.classification
                 """ + FROM + """
                 where a.workspace_id = :workspace
+                  and not exists (select 1 from evaluation_results er_scope where er_scope.product_run_id = r.id)
                 """ + where + order + """
                 limit :limit offset :offset
                 """, params, (rs, n) -> listItem(rs, actor, workspaceId));
         Long total = jdbc.queryForObject(
-                "select count(*) " + FROM + " where a.workspace_id = :workspace " + where, params, Long.class);
+                "select count(*) " + FROM + """
+                 where a.workspace_id = :workspace
+                   and not exists (select 1 from evaluation_results er_scope where er_scope.product_run_id = r.id)
+                """ + where, params, Long.class);
         var body = new LinkedHashMap<String, Object>();
         body.put("items", items);
         body.put("page", Math.max(page, 0));
@@ -93,6 +97,10 @@ public class ApprovalService {
                     count(*) filter (where status = 'CANCELLED') as cancelled
                 from approvals
                 where workspace_id = :workspace
+                  and not exists (
+                    select 1 from evaluation_results er_scope
+                    where er_scope.product_run_id = approvals.run_id
+                  )
                 """, Map.of("workspace", workspaceId), (rs, n) -> {
             var row = new LinkedHashMap<String, Object>();
             row.put("pending", rs.getLong("pending"));
@@ -122,6 +130,7 @@ public class ApprovalService {
                        tk.id as ticket_id
                 """ + FROM + """
                 where a.id = :id and a.workspace_id = :workspace
+                  and not exists (select 1 from evaluation_results er_scope where er_scope.product_run_id = r.id)
                 """, Map.of("id", approvalId, "workspace", workspaceId), (rs, n) -> detail(rs, actor, workspaceId));
         if (rows.isEmpty()) {
             throw new ApiException("NOT_FOUND", "Approval not found.", 404);

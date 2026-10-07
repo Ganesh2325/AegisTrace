@@ -94,6 +94,26 @@ def looks_like_instruction(sentence: str) -> bool:
     return any(marker in lowered for marker in _INSTRUCTION_MARKERS)
 
 
+def injection_signals(chunks: list[dict]) -> list[dict]:
+    """Return bounded references to instruction-like retrieval without copying content."""
+    signals = []
+    for chunk in chunks:
+        lowered = str(chunk.get("content") or "").lower()
+        markers = sorted({marker for marker in _INSTRUCTION_MARKERS if marker in lowered})
+        if not markers:
+            continue
+        signals.append({
+            "type": "PROMPT_INJECTION",
+            "chunkId": str(chunk.get("chunk_id") or ""),
+            "documentId": str(chunk.get("document_id") or ""),
+            "documentTitle": str(chunk.get("document_title") or ""),
+            "markerCount": len(markers),
+        })
+        if len(signals) >= 10:
+            break
+    return signals
+
+
 def _word_overlap(question: str, sentence: str) -> int:
     q = {t for t in tokenize(question) if len(t) > 3}
     s = set(tokenize(sentence))

@@ -28,6 +28,16 @@ export const STATUSES = {
   EMBEDDED: { label: "Embedded", tone: "success", icon: "check" },
   NOT_EMBEDDED: { label: "Not embedded", tone: "muted", icon: "dot" },
   EMBEDDING: { label: "Embedding", tone: "info", icon: "dot" },
+  PASS: { label: "Pass", tone: "success", icon: "check" },
+  FAIL: { label: "Fail", tone: "danger", icon: "x" },
+  ERROR: { label: "Error", tone: "danger", icon: "alert" },
+  SKIPPED: { label: "Skipped", tone: "muted", icon: "dot" },
+  INCONCLUSIVE: { label: "Inconclusive", tone: "warning", icon: "alert" },
+  PARTIAL: { label: "Partial", tone: "warning", icon: "alert" },
+  DETECTED: { label: "Detected", tone: "warning", icon: "alert" },
+  BLOCKED: { label: "Blocked", tone: "success", icon: "check" },
+  ABSTAINED: { label: "Abstained", tone: "info", icon: "dot" },
+  UNKNOWN: { label: "Unknown", tone: "muted", icon: "alert" },
 } as const;
 
 export type StatusName = keyof typeof STATUSES;

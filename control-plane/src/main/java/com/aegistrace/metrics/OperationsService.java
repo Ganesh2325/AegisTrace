@@ -66,7 +66,7 @@ public class OperationsService {
             int offset = Math.max(page, 0) * RECENT_LIMIT;
             List<Map<String, Object>> recent = queryRuns(params, filter, window, recentPredicate, RECENT_LIMIT, offset);
             Long recentTotal = jdbc.queryForObject(
-                    "select count(*) from agent_runs r where r.workspace_id = :workspace" + filter + window.sqlPredicate("r.created_at") + recentPredicate,
+                    "select count(*) from agent_runs r where r.workspace_id = :workspace" + supportRuns() + filter + window.sqlPredicate("r.created_at") + recentPredicate,
                     params, Long.class);
             List<Map<String, Object>> failures = queryRuns(params, filter, window,
                     " and r.state in ('FAILED', 'TIMED_OUT')", FAILURE_LIMIT, 0);
@@ -178,7 +178,7 @@ public class OperationsService {
                 from agent_runs r
                 join agents a on a.id = r.agent_id
                 where r.workspace_id = :workspace
-                """.formatted(RUN_COLUMNS) + visibility + window.sqlPredicate("r.created_at") + extra + """
+                """.formatted(RUN_COLUMNS) + supportRuns() + visibility + window.sqlPredicate("r.created_at") + extra + """
                 order by r.created_at desc, r.id desc
                 limit :limit offset :offset
                 """, queryParams, (rs, n) -> runRow(rs));
@@ -192,8 +192,9 @@ public class OperationsService {
                 select a.id, a.status, a.requested_at, a.decided_at, a.run_id, p.tool_name
                 from approvals a
                 join tool_proposals p on p.id = a.proposal_id
+                join agent_runs r on r.id = a.run_id
                 where a.workspace_id = :workspace
-                """ + window.sqlPredicate("a.requested_at") + """
+                """ + supportRuns() + window.sqlPredicate("a.requested_at") + """
                 order by a.requested_at desc, a.id desc
                 limit :limit
                 """, new MapSqlParameterSource(params.getValues()).addValue("limit", APPROVAL_LIMIT), (rs, n) -> {
@@ -215,7 +216,7 @@ public class OperationsService {
                 join agent_runs r on r.id = e.run_id
                 join agents a on a.id = r.agent_id
                 where r.workspace_id = :workspace
-                """ + visibility + window.sqlPredicate("e.created_at") + """
+                """ + supportRuns() + visibility + window.sqlPredicate("e.created_at") + """
                 order by e.created_at desc, e.sequence desc
                 limit :limit
                 """, new MapSqlParameterSource(params.getValues()).addValue("limit", ACTIVITY_LIMIT), (rs, n) -> {
@@ -240,6 +241,7 @@ public class OperationsService {
                 left join agent_versions av on av.agent_id = a.id and av.current_version
                 left join agent_runs r on r.agent_id = a.id
                     and r.workspace_id = :workspace
+                    and not exists (select 1 from evaluation_results er_scope where er_scope.product_run_id = r.id)
                     """ + visJoin(visibility) + window.sqlPredicate("r.created_at") + """
                 where a.workspace_id = :workspace
                 group by a.id, a.name, a.status, av.version_number
@@ -266,7 +268,7 @@ public class OperationsService {
     private List<Map<String, Object>> activityTrend(MapSqlParameterSource params, String visibility, MetricsCalculator.Window window) {
         if (window.unbounded()) {
             Instant oldest = jdbc.queryForObject(
-                    "select min(created_at) from agent_runs r where r.workspace_id = :workspace" + visibility,
+                    "select min(created_at) from agent_runs r where r.workspace_id = :workspace" + supportRuns() + visibility,
                     params, Instant.class);
             if (oldest == null) {
                 return List.of();
@@ -286,7 +288,7 @@ public class OperationsService {
                            count(*) filter (where r.state in ('FAILED', 'TIMED_OUT')) as unsuccessful
                     from agent_runs r
                     where r.workspace_id = :workspace
-                    """ + visibility + """
+                    """ + supportRuns() + visibility + """
                      and r.created_at >= :windowStart and r.created_at < :windowEnd
                     group by 1
                     order by 1
@@ -301,7 +303,7 @@ public class OperationsService {
                        count(*) filter (where r.state in ('FAILED', 'TIMED_OUT')) as unsuccessful
                 from agent_runs r
                 where r.workspace_id = :workspace
-                """ + visibility + window.sqlPredicate("r.created_at") + """
+                """ + supportRuns() + visibility + window.sqlPredicate("r.created_at") + """
                 group by 1
                 order by 1
                 """, params, (rs, n) -> trendRow(rs));
@@ -320,7 +322,7 @@ public class OperationsService {
                 where r.workspace_id = :workspace
                   and r.state in ('COMPLETED', 'FAILED', 'CANCELLED', 'TIMED_OUT')
                   and r.started_at is not null and r.ended_at is not null and r.ended_at >= r.started_at
-                """ + visibility + (window.unbounded() ? "" : window.sqlPredicate("r.ended_at")) + """
+                """ + supportRuns() + visibility + (window.unbounded() ? "" : window.sqlPredicate("r.ended_at")) + """
                 group by 1
                 having count(*) >= 1
                 order by 1
@@ -382,6 +384,10 @@ public class OperationsService {
 
     private static String visJoin(String visibility) {
         return visibility == null ? " " : visibility;
+    }
+
+    private static String supportRuns() {
+        return " and not exists (select 1 from evaluation_results er_scope where er_scope.product_run_id = r.id) ";
     }
 
     private static String activePredicate() {

@@ -3,10 +3,10 @@ import { activeItem, breadcrumb, canAccess, commandsFor, decideRoute, environmen
 
 const labels = (role: string) => visibleNav(role).map((item) => item.label);
 
-assert.deepEqual(labels("OPERATOR"), ["Overview", "Support run", "Agents", "Knowledge", "Observability"]);
-assert.deepEqual(labels("REVIEWER"), ["Overview", "Approvals", "Agents", "Observability"]);
-assert.deepEqual(labels("DEVELOPER"), ["Overview", "Agents", "Knowledge", "Evaluation", "Observability", "Audit", "Administration"]);
-assert.equal(visibleNav("ADMIN").length, 9);
+assert.deepEqual(labels("OPERATOR"), ["Overview", "Support run", "Agents", "Knowledge", "Safety", "Observability"]);
+assert.deepEqual(labels("REVIEWER"), ["Overview", "Approvals", "Agents", "Evaluation", "Safety", "Observability"]);
+assert.deepEqual(labels("DEVELOPER"), ["Overview", "Agents", "Knowledge", "Evaluation", "Safety", "Observability", "Audit", "Administration"]);
+assert.equal(visibleNav("ADMIN").length, 10);
 assert.equal(canAccess("OPERATOR", "audit.read"), false);
 assert.equal(canAccess("OPERATOR", "admin.console"), false);
 assert.equal(canAccess("REVIEWER", "approvals.read"), true);
@@ -31,7 +31,9 @@ assert.equal(canAccess("GUEST", "overview.read"), false);
 assert.equal(decideRoute("OPERATOR", "/audit").kind, "forbidden");
 assert.equal(decideRoute("OPERATOR", "/admin").kind, "forbidden");
 assert.equal(decideRoute("DEVELOPER", "/runs/new").kind, "forbidden");
-assert.equal(decideRoute("REVIEWER", "/evaluations").kind, "forbidden");
+assert.equal(decideRoute("REVIEWER", "/evaluations").kind, "allow");
+assert.equal(decideRoute("OPERATOR", "/evaluations").kind, "forbidden");
+assert.equal(decideRoute("OPERATOR", "/safety").kind, "allow");
 assert.equal(decideRoute("DEVELOPER", "/agents").kind, "allow");
 assert.equal(decideRoute("ADMIN", "/approvals").kind, "allow");
 assert.equal(decideRoute("OPERATOR", "/runs/abc").kind, "allow");

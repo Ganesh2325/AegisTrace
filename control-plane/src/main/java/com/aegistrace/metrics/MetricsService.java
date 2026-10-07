@@ -25,6 +25,7 @@ public class MetricsService {
                    end as duration_ms
             from agent_runs r
             where r.workspace_id = :workspace
+              and not exists (select 1 from evaluation_results er_scope where er_scope.product_run_id = r.id)
             """;
 
     static final String APPROVALS_SQL = """
@@ -34,19 +35,24 @@ public class MetricsService {
                        else extract(epoch from (a.decided_at - a.requested_at)) * 1000
                    end as wait_ms
             from approvals a
+            join agent_runs r on r.id = a.run_id
             where a.workspace_id = :workspace
+              and not exists (select 1 from evaluation_results er_scope where er_scope.product_run_id = r.id)
             """;
 
     static final String COUNTS_SQL = """
             select
                 (select count(*) from jobs
-                    where workspace_id = :workspace and status in ('PENDING', 'RETRY', 'RUNNING')) as queue_depth,
+                    where workspace_id = :workspace and status in ('PENDING', 'RETRY', 'RUNNING')
+                      and job_type not in ('START_EVALUATION', 'EVALUATE_CASE')) as queue_depth,
                 (select count(*) from tool_proposals p
                     join agent_runs r on r.id = p.run_id
-                    where r.workspace_id = :workspace and p.policy_decision = 'DENY') as denials,
+                    where r.workspace_id = :workspace and p.policy_decision = 'DENY'
+                      and not exists (select 1 from evaluation_results er_scope where er_scope.product_run_id = r.id)) as denials,
                 (select count(*) from tool_proposals p
                     join agent_runs r on r.id = p.run_id
-                    where r.workspace_id = :workspace and p.policy_decision is not null) as decisions,
+                    where r.workspace_id = :workspace and p.policy_decision is not null
+                      and not exists (select 1 from evaluation_results er_scope where er_scope.product_run_id = r.id)) as decisions,
                 (select count(*) from evaluations where workspace_id = :workspace) as evaluations,
                 (select count(*) from evaluations where workspace_id = :workspace and passed) as evaluation_passes
             """;

@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from aegislib.embedding import embed
-from aegislib.grounding import grounded_answer, rank_chunks
+from aegislib.grounding import grounded_answer, injection_signals, rank_chunks
 from aegislib.planner import merge_model_proposal
 from aegislib.telemetry import configure, consumer_context, span
 
@@ -87,6 +87,14 @@ def plan(body: PlanRequest, x_internal_token: str = Header(default=""), tracepar
             chunks = _load_chunks(body.workspaceId, body.knowledgeBaseId, body.knowledgeBaseVersionId, body.embeddingModel)
         retrieval_ms = int((time.perf_counter() - started) * 1000)
         ranked = rank_chunks(body.question, chunks, k=4)
+        evidence = [{
+            "chunkId": str(chunk["chunk_id"]),
+            "documentId": str(chunk["document_id"]),
+            "documentTitle": chunk["document_title"],
+            "section": chunk.get("section") or "",
+            "pageNumber": chunk.get("page_number"),
+        } for chunk in ranked]
+        safety = injection_signals(ranked)
         with span("aegistrace.runtime.ground", {"service": "agent-runtime", "model.invoked": False}):
             grounded = grounded_answer(body.question, ranked)
         model_started = time.perf_counter()
@@ -124,6 +132,8 @@ def plan(body: PlanRequest, x_internal_token: str = Header(default=""), tracepar
             "uncertain": grounded["uncertain"],
             "citations": grounded["citations"],
             "retrievedChunkCount": len(ranked),
+            "retrievedEvidence": evidence,
+            "safetyEvidence": safety,
             "usage": {
                 "inputTokens": input_tokens,
                 "outputTokens": output_tokens,

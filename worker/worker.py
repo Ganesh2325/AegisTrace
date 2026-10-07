@@ -21,6 +21,7 @@ from psycopg.rows import dict_row
 from aegislib.chunking import chunk_pages, normalize_text
 from aegislib.embedding import MODEL_ID, embed, to_pgvector
 from aegislib.execution import ExecutionError, execute_ticket
+from aegislib.evaluation import evaluate_product_run
 from aegislib.retries import backoff_seconds, classify_retry
 from aegislib.telemetry import configure, consumer_context, current_traceparent, span
 
@@ -129,6 +130,7 @@ def finish(job_id, status: str, error: str | None) -> None:
 
 def fail(job, error_type: str, message: str, retryable: bool) -> None:
     attempt = int(job["attempts"])
+    terminal = not retryable or attempt >= int(job["max_attempts"])
     with connect() as conn:
         conn.execute(
             """
@@ -137,7 +139,7 @@ def fail(job, error_type: str, message: str, retryable: bool) -> None:
             """,
             (str(uuid.uuid4()), job["id"], attempt, error_type, message, retryable),
         )
-        if retryable and attempt < int(job["max_attempts"]):
+        if not terminal:
             conn.execute(
                 """
                 update jobs set status = 'RETRY', locked_by = null, locked_until = null,
@@ -155,6 +157,31 @@ def fail(job, error_type: str, message: str, retryable: bool) -> None:
                 (f"{error_type}: {message}", job["id"]),
             )
         conn.commit()
+    if terminal:
+        payload = job["payload"] if isinstance(job["payload"], dict) else json.loads(job["payload"])
+        try:
+            if job["job_type"] == "EVALUATE_CASE":
+                internal_post(f"/internal/evaluation-results/{payload['evaluationResultId']}/complete", {
+                    "status": "ERROR",
+                    "score": None,
+                    "failureCategory": error_type,
+                    "explanation": "Evaluation infrastructure exhausted its retry budget.",
+                    "checks": [{
+                        "key": "infrastructure.worker",
+                        "status": "ERROR",
+                        "score": None,
+                        "failureCategory": error_type,
+                        "explanation": "Evaluation infrastructure exhausted its retry budget.",
+                        "evidence": {"errorType": error_type},
+                    }],
+                    "signals": [],
+                })
+            elif job["job_type"] == "START_EVALUATION":
+                internal_post(f"/internal/evaluations/{payload['evaluationExecutionId']}/failed", {
+                    "errorType": error_type,
+                })
+        except Exception as callback_error:
+            print(f"evaluation_failure_callback_failed {callback_error.__class__.__name__}")
 
 
 def process(job) -> None:
@@ -187,6 +214,10 @@ def process(job) -> None:
                 execute_and_callback(job)
         elif job["job_type"] == "EVALUATE_RUN":
             evaluate_run(payload["runId"])
+        elif job["job_type"] == "START_EVALUATION":
+            internal_post(f"/internal/evaluations/{payload['evaluationExecutionId']}/dispatch", {})
+        elif job["job_type"] == "EVALUATE_CASE":
+            evaluate_case(payload["runId"], payload["evaluationResultId"])
         elif job["job_type"] == "SIMULATE":
             mode = payload.get("mode")
             if mode == "ticket_400":
@@ -244,6 +275,16 @@ def callback(run_id: str, body: dict) -> None:
             headers=headers,
             json=body,
         )
+        response.raise_for_status()
+
+
+def internal_post(path: str, body: dict) -> None:
+    headers = {"X-Internal-Token": TOKEN}
+    parent = current_traceparent()
+    if parent:
+        headers["traceparent"] = parent
+    with httpx.Client(timeout=30) as client:
+        response = client.post(f"{CONTROL_PLANE}{path}", headers=headers, json=body)
         response.raise_for_status()
 
 
@@ -444,7 +485,7 @@ def evaluate_run(run_id: str) -> None:
             insert into evaluations (
                 id, workspace_id, run_id, agent_version_id, prompt_version_id, model,
                 dataset_version, evaluator_version, scores, passed
-            ) values (%s, %s, %s, %s, %s, %s, 'support-v1', 'heuristic-v1', %s::jsonb, %s)
+            ) values (%s, %s, %s, %s, %s, %s, 'live-run-v1', 'heuristic-v1', %s::jsonb, %s)
             on conflict (run_id, evaluator_version) do nothing
             """,
             (
@@ -453,6 +494,12 @@ def evaluate_run(run_id: str) -> None:
             ),
         )
         conn.commit()
+
+
+def evaluate_case(run_id: str, result_id: str) -> None:
+    with connect() as conn:
+        outcome = evaluate_product_run(conn, run_id, result_id)
+    internal_post(f"/internal/evaluation-results/{result_id}/complete", outcome)
 
 
 def _groundedness(answer: str, citations: list, conn) -> float:

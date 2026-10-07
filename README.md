@@ -116,9 +116,9 @@ JSON logs. Micrometer metrics on `/actuator/prometheus`. Traces exported over OT
 
 ## Evaluation
 
-`evaluation/datasets/support-v1.json` has 30 cases: grounded answers, citations, abstention, tool choice, injection, plus policy and retry cases covered in Java and the retry classifier. `python evaluation/run_critical.py` exits non-zero on failure. The per-run worker score checks quote containment, approval-before-ticket, and a single ticket. It is a heuristic, not a labeled human study.
+The Evaluation Center provides immutable cases and suites, asynchronous execution against explicit agent and knowledge versions, deterministic check evidence, history, comparison, and regression detection. The Safety Center exposes persisted policy, approval, abstention, injection, and evaluation signals without AI confidence scores or private reasoning. See `docs/evaluation-and-safety.md` for exact scoring, access, and privacy semantics.
 
-A run of that script in this workspace produced `evaluation/latest-report.json` with 30 cases and an empty failure list. Re-run the script before quoting that file.
+`evaluation/datasets/support-v1.json` has 30 offline critical cases. `python evaluation/run_critical.py` executes Python-grounding/tool/retry cases and explicitly delegates six authoritative policy fixtures to `EvaluationPolicyFixturesTest`; its report distinguishes those counts and exits non-zero on failure.
 
 ## Performance
 
@@ -216,4 +216,4 @@ python scripts/scan_secrets.py
 
 CI is `.github/workflows/ci.yml`.
 
-In this workspace, after the code was written: Java reported 57 tests passed, pytest reported 7 passed, and the evaluation script reported 0 failures across 30 cases. Those commands are the evidence. Run them again rather than trusting this paragraph after the code changes.
+Run the commands above before quoting test counts; committed reports are not a substitute for a fresh verification run.

@@ -29,7 +29,8 @@ Next.js App Router, React, TypeScript, Tailwind. There is no client store beyond
 | `/approvals` | Pending queue. Approve and reject. Polls every 3s. |
 | `/agents` | List and activate or deactivate. |
 | `/knowledge` | First knowledge base and its documents. Read only. |
-| `/evaluations` | Last 100 evaluation rows. |
+| `/evaluations` | Versioned cases/suites, asynchronous executions, deterministic metrics, history, detail, and comparison. |
+| `/safety` | Deterministic policy, approval, abstention, injection, and evaluation safety signals. |
 | `/observability` | Links to Jaeger and Grafana, plus the raw metrics JSON. |
 | `/audit` | Latest audit page. |
 | `/admin` | Users, settings JSON, policy dry run. |
@@ -47,8 +48,9 @@ Spring Boot. Controllers:
 - `RunController`: create, list, detail, timeline, SSE, cancel, approvals, approve, reject.
 - `AgentController`: agents, versions, status, tools.
 - `KnowledgeController`: list bases, create base, list documents, upload.
-- `PlatformController`: audit, metrics, evaluations, users, memberships, settings, policy dry run, failure simulations, jobs.
-- `InternalController`: worker tool-result callback with `X-Internal-Token`.
+- `EvaluationController` and `SafetyController`: workspace-scoped evaluation catalog, execution, history, comparison, and safety signals.
+- `PlatformController`: audit, metrics, legacy evaluations, users, memberships, settings, policy dry run, failure simulations, jobs.
+- `InternalController`: worker tool-result and evaluation callbacks with `X-Internal-Token`.
 - `HealthController`: `/liveness`, `/readiness`, `/health`.
 
 Policy and the tool gateway are Java packages, not separate services. Jobs are rows in Postgres (`FOR UPDATE SKIP LOCKED`), not a Redis queue.
@@ -56,14 +58,14 @@ Policy and the tool gateway are Java packages, not separate services. Jobs are r
 ## AI runtime and worker
 
 - `agent-runtime/app.py` retrieves, answers, and proposes. It cannot insert tickets.
-- `worker/worker.py` embeds documents, creates a ticket once per idempotency key, and writes `heuristic-v1` evaluations.
+- `worker/worker.py` embeds documents, creates a ticket once per idempotency key, writes legacy live-run heuristics, and runs versioned deterministic evaluation cases.
 - `py/aegislib` holds chunking, feature-hash embeddings (384 dimensions, `feature-hash-v1`), grounding, and the planner.
 - Default model is `grounded-extractive` / `grounded-extractive-v1`. An OpenAI call happens only when a key is set and the provider is `openai`.
 - Retrieved document text is not passed into the planner as instructions.
 
 ## Database
 
-One Flyway migration, `V1__init.sql`. Tables: users, workspaces, memberships, workspace_settings, login_failures, knowledge_bases, agents, prompt_versions, agent_versions, tools, agent_version_tools, documents, document_chunks (pgvector plus a lexical GIN index), agent_runs, run_events, tool_proposals, approvals, jobs, job_attempts, tool_executions, tickets, evaluations, audit_events.
+Flyway migrations preserve the original schema and add versioned agent, knowledge, approval, observability, audit, evaluation, and safety structures. Evaluation tables are `evaluation_cases`, `evaluation_suites`, `evaluation_suite_cases`, `evaluation_executions`, `evaluation_results`, `evaluation_checks`, and `safety_signals`; the original `evaluations` table remains the legacy per-run heuristic store.
 
 Seeded local workspace `11111111-1111-1111-1111-111111111111` with four users. Password is the dev seed password. Knowledge page showed 11 ACTIVE documents in `support-policies`.
 
@@ -83,9 +85,9 @@ The UI does not hide links the role cannot use.
 
 ## Tests and delivery
 
-Java unit tests cover the policy engine, argument validation, cost rates, and the run state machine. Python tests cover embeddings, grounding, the planner, and retries. `evaluation/run_critical.py` is an offline scenario script. There are no frontend tests, no HTTP integration tests, and no browser end-to-end tests.
+Java tests cover policy, access, version integrity, evaluation fixtures, privacy contracts, cost rates, and run state. Python tests cover embeddings, grounding, planning, retries, deterministic evaluation scoring, and bounded injection evidence. Frontend helper tests cover access and evaluation presentation. `evaluation/run_critical.py` reports Python-executed and Java-delegated cases separately.
 
-GitHub Actions runs those Java tests, the Python tests, the evaluation script, `npm run typecheck`, and `scripts/scan_secrets.py`. It does not build images or deploy.
+GitHub Actions runs Java tests, Python tests, the critical evaluation script, frontend tests/typecheck/production build, and the secret scan. It does not deploy.
 
 `infrastructure/aws/main.tf` sketches a VPC, two subnets, RDS Postgres, ElastiCache, S3, a secrets shell, an ECS cluster, and a log group. It has no task definitions, services, or load balancer, and it has not been applied.
 

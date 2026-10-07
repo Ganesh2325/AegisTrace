@@ -1,5 +1,14 @@
 {
   "dataset": "support-v1",
-  "cases": 30,
+  "totalCases": 30,
+  "pythonExecuted": 24,
+  "javaPolicyFixtures": [
+    "a1",
+    "a2",
+    "a3",
+    "z1",
+    "z2",
+    "b1"
+  ],
   "failures": []
 }

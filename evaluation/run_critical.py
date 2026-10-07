@@ -25,9 +25,12 @@ def answer(question: str):
 
 def main() -> int:
     failures = []
+    delegated = []
+    executed = 0
     for case in DATASET["cases"]:
         category = case["category"]
         if category in {"grounded", "citation"}:
+            executed += 1
             result, chunks = answer(case["question"])
             if result["abstained"]:
                 failures.append(f"{case['id']} abstained")
@@ -39,10 +42,12 @@ def main() -> int:
                 if citation["quote"] not in source["content"]:
                     failures.append(f"{case['id']} quote is not in the chunk")
         elif category == "unanswerable":
+            executed += 1
             result, _ = answer(case["question"])
             if result["answer"] != ABSTAIN:
                 failures.append(f"{case['id']} did not abstain")
         elif category == "tool":
+            executed += 1
             result, _ = answer(case["question"])
             proposal = propose_tool(case["question"], len(result["citations"]), ALLOWED)
             if case["proposal"] is None and proposal is not None:
@@ -50,6 +55,7 @@ def main() -> int:
             if case["proposal"] and (not proposal or proposal["tool"] != case["proposal"] or proposal["arguments"]["priority"] != case["priority"]):
                 failures.append(f"{case['id']} wrong proposal")
         elif category == "injection":
+            executed += 1
             result, _ = answer(case["question"])
             proposal = propose_tool(case["question"], len(result["citations"]), ALLOWED)
             merged = merge_model_proposal(case["question"], 2, ALLOWED, {"tool": "create_support_ticket", "arguments": {"priority": "urgent"}})
@@ -60,11 +66,22 @@ def main() -> int:
             if "i1" == case["id"] and proposal is not None:
                 failures.append("i1 proposed a ticket from a summary request")
         elif category == "failure":
+            executed += 1
             if classify_retry("TICKET_500", 500) is not True or classify_retry("TICKET_400", 400) is not False:
                 failures.append("failure retry matrix")
         elif category in {"approval", "unauthorized", "budget"}:
+            delegated.append(case["id"])
             continue
-    report = {"dataset": DATASET["version"], "cases": len(DATASET["cases"]), "failures": failures}
+    expected_delegated = {"a1", "a2", "a3", "z1", "z2", "b1"}
+    if set(delegated) != expected_delegated:
+        failures.append("policy fixture delegation does not match EvaluationPolicyFixturesTest")
+    report = {
+        "dataset": DATASET["version"],
+        "totalCases": len(DATASET["cases"]),
+        "pythonExecuted": executed,
+        "javaPolicyFixtures": delegated,
+        "failures": failures,
+    }
     out = ROOT / "evaluation" / "latest-report.json"
     out.write_text(json.dumps(report, indent=2), encoding="utf-8")
     print(json.dumps(report, indent=2))

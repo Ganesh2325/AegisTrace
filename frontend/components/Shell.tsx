@@ -5,16 +5,15 @@ import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { activeItem, breadcrumb, commandsFor, decideRoute, environmentLabel, visibleGroups, type Command } from "../lib/access";
 import { api, roleOf, type Me } from "../lib/api";
-import { clearSession, readSession, writeSession } from "../lib/session";
+import { clearSession, writeSession } from "../lib/session";
 import { Button } from "./ui/Button";
 import { Icon } from "./ui/Icon";
 import { ForbiddenState, PageLoading } from "./ui/States";
 import { ToastProvider } from "./ui/Toast";
 
 export function Shell({ children }: { children: ReactNode }) {
-  const cached = readSession();
-  const [me, setMe] = useState<Me | null>(cached.current);
-  const [ready, setReady] = useState(cached.loaded);
+  const [me, setMe] = useState<Me | null>(null);
+  const [ready, setReady] = useState(false);
   const [leaving, setLeaving] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const [drawer, setDrawer] = useState(false);

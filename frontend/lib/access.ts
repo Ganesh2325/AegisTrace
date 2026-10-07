@@ -11,6 +11,8 @@ export type Capability =
   | "knowledge.read"
   | "knowledge.manage"
   | "evaluation.read"
+  | "evaluation.manage"
+  | "safety.read"
   | "observability.read"
   | "audit.read"
   | "admin.console";
@@ -22,6 +24,7 @@ export type NavIcon =
   | "agent"
   | "knowledge"
   | "evaluation"
+  | "safety"
   | "observability"
   | "audit"
   | "admin";
@@ -57,15 +60,17 @@ const ALL: Capability[] = [
   "knowledge.read",
   "knowledge.manage",
   "evaluation.read",
+  "evaluation.manage",
+  "safety.read",
   "observability.read",
   "audit.read",
   "admin.console",
 ];
 
 const ROLE_CAPABILITIES: Record<Role, Capability[]> = {
-  OPERATOR: ["overview.read", "runs.read", "runs.create", "agents.read", "knowledge.read", "observability.read"],
-  REVIEWER: ["overview.read", "runs.read", "approvals.read", "approvals.review", "agents.read", "observability.read"],
-  DEVELOPER: ["overview.read", "runs.read", "agents.read", "agents.configure", "knowledge.read", "knowledge.manage", "evaluation.read", "observability.read", "audit.read", "admin.console"],
+  OPERATOR: ["overview.read", "runs.read", "runs.create", "agents.read", "knowledge.read", "safety.read", "observability.read"],
+  REVIEWER: ["overview.read", "runs.read", "approvals.read", "approvals.review", "agents.read", "evaluation.read", "safety.read", "observability.read"],
+  DEVELOPER: ["overview.read", "runs.read", "agents.read", "agents.configure", "knowledge.read", "knowledge.manage", "evaluation.read", "evaluation.manage", "safety.read", "observability.read", "audit.read", "admin.console"],
   ADMIN: ALL,
 };
 
@@ -75,7 +80,8 @@ export const NAV_ITEMS: NavItem[] = [
   { label: "Approvals", href: "/approvals", icon: "approval", capability: "approvals.read", description: "Review sensitive agent actions", group: "workspace", match: (path) => path === "/approvals" || path.startsWith("/approvals/") },
   { label: "Agents", href: "/agents", icon: "agent", capability: "agents.read", description: "Agent versions and configuration", group: "build", match: (path) => path === "/agents" || path.startsWith("/agents/") },
   { label: "Knowledge", href: "/knowledge", icon: "knowledge", capability: "knowledge.read", description: "Document corpus", group: "build", match: (path) => path === "/knowledge" || path.startsWith("/knowledge/") },
-  { label: "Evaluation", href: "/evaluations", icon: "evaluation", capability: "evaluation.read", description: "Heuristic evaluation checks", group: "intelligence", match: (path) => path === "/evaluations" || path.startsWith("/evaluations/") },
+  { label: "Evaluation", href: "/evaluations", icon: "evaluation", capability: "evaluation.read", description: "Versioned evaluation and regressions", group: "intelligence", match: (path) => path === "/evaluations" || path.startsWith("/evaluations/") },
+  { label: "Safety", href: "/safety", icon: "safety", capability: "safety.read", description: "Deterministic safety signals", group: "governance", match: (path) => path === "/safety" || path.startsWith("/safety/") },
   { label: "Observability", href: "/observability", icon: "observability", capability: "observability.read", description: "Metrics and trace tools", group: "intelligence", match: (path) => path === "/observability" || path.startsWith("/observability/") },
   { label: "Audit", href: "/audit", icon: "audit", capability: "audit.read", description: "Append-only audit history", group: "governance", match: (path) => path === "/audit" || path.startsWith("/audit/") },
   { label: "Administration", href: "/admin", icon: "admin", capability: "admin.console", description: "Membership and policy dry run", group: "system", match: (path) => path === "/admin" || path.startsWith("/admin/") },
@@ -152,6 +158,13 @@ function extraCommands(role: string): Command[] {
     extras.push({ id: "open-observability", label: "Open Observability", href: "/observability", keywords: "observability traces metrics latency" });
     extras.push({ id: "open-traces", label: "Open Traces", href: "/observability/traces", keywords: "search traces jaeger" });
   }
+  if (canAccess(role, "evaluation.read")) {
+    extras.push({ id: "evaluation-history", label: "Evaluation history", href: "/evaluations/runs", keywords: "evaluation runs history results" });
+    extras.push({ id: "evaluation-compare", label: "Compare evaluations", href: "/evaluations/compare", keywords: "evaluation compare regression improvement" });
+  }
+  if (canAccess(role, "safety.read")) {
+    extras.push({ id: "safety-center", label: "Safety Center", href: "/safety", keywords: "safety policy injection blocked signals" });
+  }
   if (canAccess(role, "audit.read")) {
     extras.push({ id: "open-audit", label: "Open Audit", href: "/audit", keywords: "search audit governance events" });
   }
@@ -169,6 +182,11 @@ export function environmentLabel(value: string | undefined): string {
 }
 
 export function breadcrumb(role: string, pathname: string): { href?: string; label: string }[] {
+  const evaluationRun = pathname.match(/^\/evaluations\/runs\/([^/]+)$/);
+  if (evaluationRun) return [{ href: "/evaluations", label: "Evaluation" }, { href: "/evaluations/runs", label: "Runs" }, { label: "Detail" }];
+  if (pathname === "/evaluations/suites") return [{ href: "/evaluations", label: "Evaluation" }, { label: "Suites & cases" }];
+  if (pathname === "/evaluations/runs") return [{ href: "/evaluations", label: "Evaluation" }, { label: "Runs" }];
+  if (pathname === "/evaluations/compare") return [{ href: "/evaluations", label: "Evaluation" }, { label: "Compare" }];
   const agent = pathname.match(/^\/agents\/([^/]+)$/);
   if (agent) return [{ href: "/agents", label: "Agents" }, { label: "Agent" }];
   const knowledgeDoc = pathname.match(/^\/knowledge\/documents\/([^/]+)$/);

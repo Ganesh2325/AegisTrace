@@ -92,6 +92,8 @@ public class RuntimeClient {
             boolean abstained,
             boolean uncertain,
             List<Map<String, Object>> citations,
+            List<Map<String, Object>> retrievedEvidence,
+            List<Map<String, Object>> safetyEvidence,
             int retrievedChunkCount,
             int inputTokens,
             int outputTokens,
@@ -107,6 +109,14 @@ public class RuntimeClient {
             if (node.has("citations") && node.get("citations").isArray()) {
                 node.get("citations").forEach(item -> citations.add(mapper.convertValue(item, Map.class)));
             }
+            var retrievedEvidence = new ArrayList<Map<String, Object>>();
+            if (node.has("retrievedEvidence") && node.get("retrievedEvidence").isArray()) {
+                node.get("retrievedEvidence").forEach(item -> retrievedEvidence.add(mapper.convertValue(item, Map.class)));
+            }
+            var safetyEvidence = new ArrayList<Map<String, Object>>();
+            if (node.has("safetyEvidence") && node.get("safetyEvidence").isArray()) {
+                node.get("safetyEvidence").forEach(item -> safetyEvidence.add(mapper.convertValue(item, Map.class)));
+            }
             JsonNode usage = node.path("usage");
             JsonNode proposal = node.get("toolProposal");
             Map<String, Object> proposalMap = proposal == null || proposal.isNull() ? null : mapper.convertValue(proposal, Map.class);
@@ -120,6 +130,8 @@ public class RuntimeClient {
                     node.path("abstained").asBoolean(false),
                     node.path("uncertain").asBoolean(false),
                     citations,
+                    retrievedEvidence,
+                    safetyEvidence,
                     node.path("retrievedChunkCount").asInt(0),
                     usage.path("inputTokens").asInt(0),
                     usage.path("outputTokens").asInt(0),

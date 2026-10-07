@@ -42,6 +42,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -171,6 +172,88 @@ public class RunService {
         return execution(actor, workspaceId, runId);
     }
 
+    public UUID createEvaluationRun(UUID userId, UUID workspaceId, UUID agentVersionId,
+                                    UUID knowledgeVersionId, UUID evaluationResultId, String question) {
+        UUID runId = UUID.randomUUID();
+        var root = tracer.nextSpan().name("aegistrace.evaluation.case");
+        root.tag("run.id", runId.toString());
+        root.tag("workspace.id", workspaceId.toString());
+        root.tag("evaluation.result_id", evaluationResultId.toString());
+        root.start();
+        String traceId = root.context().traceId();
+        if (traceId == null || traceId.isBlank() || traceId.chars().allMatch(ch -> ch == '0')) {
+            traceId = UUID.randomUUID().toString().replace("-", "");
+        }
+        String finalTrace = traceId;
+        String spanId = com.aegistrace.observability.W3cTraceContext.spanId(root.context().spanId());
+        tx.executeWithoutResult(status -> {
+            AgentVersion version = loadSpecificVersion(workspaceId, agentVersionId);
+            Integer knowledgeNumber = jdbc.queryForObject("""
+                    select kv.version_number from knowledge_base_versions kv
+                    join knowledge_bases kb on kb.id = kv.knowledge_base_id
+                    where kv.id = :version and kv.knowledge_base_id = :kb and kb.workspace_id = :workspace
+                    """, Map.of("version", knowledgeVersionId, "kb", version.knowledgeBaseId(), "workspace", workspaceId),
+                    Integer.class);
+            if (knowledgeNumber == null) {
+                throw new ApiException("VALIDATION_FAILED", "Knowledge version does not match the agent knowledge base.", 400);
+            }
+            var snapshot = new LinkedHashMap<String, Object>(version.snapshot());
+            snapshot.put("knowledgeBaseVersionId", knowledgeVersionId.toString());
+            snapshot.put("knowledgeVersion", knowledgeNumber);
+            long timeoutMs = ((Number) snapshot.getOrDefault("timeoutMs", 60_000)).longValue();
+            jdbc.update("""
+                    insert into agent_runs (
+                        id, workspace_id, user_id, agent_id, agent_version_id, prompt_version_id, knowledge_base_id,
+                        knowledge_base_version_id, request_id, trace_id, span_id, state, question, provider, model,
+                        snapshot, timeout_at
+                    ) values (
+                        :id, :workspace, :user, :agent, :agentVersion, :prompt, :kb,
+                        :knowledgeVersion, :request, :trace, :span, 'QUEUED', :question, :provider, :model,
+                        :snapshot, :timeoutAt
+                    )
+                    """, new MapSqlParameterSource()
+                    .addValue("id", runId).addValue("workspace", workspaceId).addValue("user", userId)
+                    .addValue("agent", version.agentId()).addValue("agentVersion", version.id())
+                    .addValue("prompt", version.promptVersionId()).addValue("kb", version.knowledgeBaseId())
+                    .addValue("knowledgeVersion", knowledgeVersionId)
+                    .addValue("request", "evaluation:" + evaluationResultId)
+                    .addValue("trace", finalTrace).addValue("span", spanId)
+                    .addValue("question", question).addValue("provider", version.provider())
+                    .addValue("model", version.model())
+                    .addValue("snapshot", Jsons.jsonb(Jsons.write(mapper, snapshot)))
+                    .addValue("timeoutAt", java.sql.Timestamp.from(Instant.now().plusMillis(timeoutMs))));
+            int linked = jdbc.update("""
+                    update evaluation_results
+                    set product_run_id = :run, status = 'RUNNING', started_at = now()
+                    where id = :result and status = 'QUEUED' and product_run_id is null
+                    """, Map.of("run", runId, "result", evaluationResultId));
+            if (linked != 1) {
+                throw new ApiException("CONFLICT", "Evaluation case was already dispatched.", 409);
+            }
+            audit.record(workspaceId, userId, "RUN_CREATED", "agent_run", runId.toString(), runId,
+                    Map.of("agentVersionId", version.id().toString(), "evaluationResultId", evaluationResultId.toString()));
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    executor.execute(() -> {
+                        MDC.put("run_id", runId.toString());
+                        MDC.put("trace_id", finalTrace);
+                        try (Tracer.SpanInScope ignored = tracer.withSpan(root)) {
+                            orchestrate(runId);
+                        } catch (Exception ex) {
+                            log.error("evaluation_orchestration_failed error_type={}", ex.getClass().getSimpleName());
+                            fail(runId, "INTERNAL", "INTERNAL", "The evaluation run failed.");
+                        } finally {
+                            root.end();
+                            MDC.clear();
+                        }
+                    });
+                }
+            });
+        });
+        return runId;
+    }
+
     public void orchestrate(UUID runId) {
         if (!transition(runId, "RUNNING")) {
             return;
@@ -201,6 +284,8 @@ public class RunService {
         audit.record(run.workspaceId(), run.userId(), "POLICY_DECISION", "tool", "search_knowledge", runId, Map.of(
                 "decision", search.kind().name(), "code", search.code()));
         if (search.denied()) {
+            recordSafetySignal(run.workspaceId(), runId, "POLICY_DENIAL", "BLOCKED", "HIGH",
+                    Map.of("tool", "search_knowledge", "policyCode", search.code()));
             complete(runId, "Knowledge retrieval was denied by policy. No ticket was created.", "POLICY_DENIED");
             return;
         }
@@ -223,7 +308,8 @@ public class RunService {
                 || cost.compareTo(new BigDecimal(snapshot.get("costBudgetUsd").toString())) > 0;
         jdbc.update("""
                 update agent_runs set input_tokens = :inTok, output_tokens = :outTok, estimated_cost_usd = :cost,
-                    draft_answer = :draft, citations = :citations
+                    draft_answer = :draft, citations = :citations, retrieved_evidence = :retrieved,
+                    safety_evidence = :safety
                 where id = :id
                 """, new MapSqlParameterSource()
                 .addValue("inTok", plan.inputTokens())
@@ -231,7 +317,13 @@ public class RunService {
                 .addValue("cost", cost)
                 .addValue("draft", plan.answer())
                 .addValue("citations", Jsons.jsonb(Jsons.write(mapper, plan.citations())))
+                .addValue("retrieved", Jsons.jsonb(Jsons.write(mapper, plan.retrievedEvidence())))
+                .addValue("safety", Jsons.jsonb(Jsons.write(mapper, plan.safetyEvidence())))
                 .addValue("id", runId));
+        if (!plan.safetyEvidence().isEmpty()) {
+            recordSafetySignal(run.workspaceId(), runId, "PROMPT_INJECTION", "DETECTED", "HIGH",
+                    Map.of("detectedChunks", plan.safetyEvidence().size()));
+        }
         meters.counter("aegis.tokens", "kind", "input").increment(plan.inputTokens());
         meters.counter("aegis.tokens", "kind", "output").increment(plan.outputTokens());
         meters.counter("aegis.estimated.cost.usd").increment(cost.doubleValue());
@@ -243,6 +335,10 @@ public class RunService {
                 "abstained", plan.abstained(),
                 "supported", plan.supported()));
         if (plan.toolProposal() == null) {
+            if (plan.abstained()) {
+                recordSafetySignal(run.workspaceId(), runId, "ABSTENTION", "ABSTAINED", "LOW",
+                        Map.of("supported", plan.supported()));
+            }
             complete(runId, plan.answer(), null);
             return;
         }
@@ -288,6 +384,12 @@ public class RunService {
         audit.record(run.workspaceId(), run.userId(), "POLICY_DECISION", "tool_proposal", proposalId.toString(), runId, Map.of(
                 "decision", decision.kind().name(), "code", decision.code(), "tool", toolName));
         if (decision.denied() || decision.kind() == PolicyDecision.Kind.ALLOW) {
+            if (decision.denied()) {
+                String type = Set.of("PROHIBITED_PRIORITY", "UNKNOWN_TOOL").contains(decision.code())
+                        ? "UNSAFE_TOOL_ATTEMPT" : "POLICY_DENIAL";
+                recordSafetySignal(run.workspaceId(), runId, type, "BLOCKED", "HIGH",
+                        Map.of("tool", toolName, "policyCode", decision.code()));
+            }
             String suffix = decision.denied()
                     ? "\n\nThe proposed action was denied by policy (" + decision.code() + "). No ticket was created."
                     : "\n\nThe proposed action was not a write that this control plane executes inline. No ticket was created.";
@@ -319,6 +421,9 @@ public class RunService {
                 "approvalId", approvalId, "proposalId", proposalId, "requiredRole", decision.requiredRole()));
         audit.record(run.workspaceId(), run.userId(), "APPROVAL_REQUESTED", "approval", approvalId.toString(), runId, Map.of(
                 "tool", toolName, "requiredRole", decision.requiredRole()));
+        recordSafetySignal(run.workspaceId(), runId, "APPROVAL_REQUIRED", "DETECTED", "MEDIUM",
+                Map.of("tool", toolName, "requiredRole", decision.requiredRole()));
+        enqueueExplicitEvaluation(runId);
     }
 
     public Map<String, Object> decide(Actor actor, UUID workspaceId, UUID approvalId, boolean approve, String reason) {
@@ -341,7 +446,11 @@ public class RunService {
                     select a.status, a.required_role, a.expires_at, a.run_id, a.proposal_id, a.requester_id,
                            p.tool_name, p.arguments::text as arguments
                     from approvals a join tool_proposals p on p.id = a.proposal_id
-                    where a.id = :id and a.workspace_id = :workspace for update of a
+                    where a.id = :id and a.workspace_id = :workspace
+                      and not exists (
+                        select 1 from evaluation_results er_scope where er_scope.product_run_id = a.run_id
+                      )
+                    for update of a
                     """, Map.of("id", approvalId, "workspace", workspaceId), (rs, n) -> new ApprovalRow(
                     rs.getString("status"),
                     rs.getString("required_role"),
@@ -423,6 +532,8 @@ public class RunService {
                 events.append(runId, "TOOL_STARTED", "TOOL_EXECUTING", Map.of("tool", row.toolName()));
                 audit.record(workspaceId, actor.id(), "APPROVAL_APPROVED", "approval", approvalId.toString(), runId, Map.of(
                         "tool", row.toolName(), "proposalId", row.proposalId().toString(), "reason", trimmedReason));
+                recordSafetySignal(workspaceId, runId, "APPROVAL_DECISION", "APPROVED", "MEDIUM",
+                        Map.of("tool", row.toolName()));
             } else {
                 if (!transition(runId, "REJECTED")) {
                     throw new ApiException("CONFLICT", "The run can no longer be rejected.", 409, runId);
@@ -430,6 +541,8 @@ public class RunService {
                 events.append(runId, "APPROVAL_REJECTED", "REJECTED", Map.of("approvalId", approvalId, "reason", trimmedReason));
                 audit.record(workspaceId, actor.id(), "APPROVAL_REJECTED", "approval", approvalId.toString(), runId, Map.of(
                         "reason", trimmedReason, "proposalId", row.proposalId().toString()));
+                recordSafetySignal(workspaceId, runId, "APPROVAL_DECISION", "REJECTED", "MEDIUM",
+                        Map.of("tool", row.toolName()));
                 String draft = jdbc.queryForObject("select coalesce(draft_answer, '') from agent_runs where id = :id",
                         Map.of("id", runId), String.class);
                 complete(runId, draft + "\n\nA reviewer declined the proposed support ticket. No ticket was created.", null);
@@ -493,12 +606,35 @@ public class RunService {
                     """, Map.of("id", runId));
             events.append(runId, "RUN_CANCELLED", "CANCELLED", Map.of());
             audit.record(workspaceId, actor.id(), "RUN_CANCELLED", "agent_run", runId.toString(), runId, Map.of());
+            enqueueExplicitEvaluation(runId);
             for (UUID approvalId : cancelled) {
                 events.append(runId, "APPROVAL_CANCELLED", "CANCELLED", Map.of("approvalId", approvalId));
                 audit.record(workspaceId, actor.id(), "APPROVAL_CANCELLED", "approval", approvalId.toString(), runId, Map.of());
             }
         });
         return execution(actor, workspaceId, runId);
+    }
+
+    public void cancelEvaluationRun(UUID runId) {
+        tx.executeWithoutResult(status -> {
+            String state = jdbc.queryForObject(
+                    "select state from agent_runs where id = :id for update", Map.of("id", runId), String.class);
+            if (state == null || RunStateMachine.isTerminal(state) || !RunStateMachine.canTransition(state, "CANCELLED")) {
+                return;
+            }
+            jdbc.update("""
+                    update agent_runs set state = 'CANCELLED', ended_at = now(),
+                        failure_category = 'CANCELLED', error_code = 'EVALUATION_CANCELLED',
+                        error_message = 'The evaluation execution was cancelled.'
+                    where id = :id
+                    """, Map.of("id", runId));
+            closePendingApprovals(runId, "CANCELLED");
+            events.append(runId, "RUN_CANCELLED", "CANCELLED", Map.of("source", "evaluation"));
+            UUID workspaceId = jdbc.queryForObject(
+                    "select workspace_id from agent_runs where id = :id", Map.of("id", runId), UUID.class);
+            audit.record(workspaceId, null, "RUN_CANCELLED", "agent_run", runId.toString(), runId,
+                    Map.of("source", "evaluation"));
+        });
     }
 
     public Map<String, Object> get(Actor actor, UUID workspaceId, UUID runId) {
@@ -587,6 +723,7 @@ public class RunService {
                 join agent_runs r on r.id = a.run_id
                 join users u on u.id = a.requester_id
                 where a.id = :id
+                  and not exists (select 1 from evaluation_results er_scope where er_scope.product_run_id = r.id)
                 """, Map.of("id", approvalId), (rs, n) -> {
             var row = new LinkedHashMap<String, Object>();
             row.put("id", UUID.fromString(rs.getString("id")));
@@ -732,6 +869,7 @@ public class RunService {
         if (Boolean.TRUE.equals(changed)) {
             events.append(runId, "RUN_COMPLETED", "COMPLETED", Map.of("category", category == null ? "" : category));
             enqueueEvaluation(runId);
+            enqueueExplicitEvaluation(runId);
             meters.counter("aegis.runs", "result", "completed").increment();
         }
     }
@@ -761,6 +899,7 @@ public class RunService {
             events.append(runId, "TIMED_OUT".equals(target) ? "RUN_TIMED_OUT" : "RUN_FAILED", target, Map.of(
                     "category", category, "code", code));
             meters.counter("aegis.runs", "result", target.toLowerCase()).increment();
+            enqueueExplicitEvaluation(runId);
             UUID workspaceId = jdbc.queryForObject("select workspace_id from agent_runs where id = :id", Map.of("id", runId), UUID.class);
             for (UUID approvalId : closed) {
                 events.append(runId, "APPROVAL_CANCELLED", target, Map.of("approvalId", approvalId));
@@ -797,7 +936,29 @@ public class RunService {
         }
     }
 
+    private void recordSafetySignal(UUID workspaceId, UUID runId, String type, String disposition,
+                                    String severity, Map<String, Object> evidence) {
+        jdbc.update("""
+                insert into safety_signals (
+                    id, workspace_id, run_id, signal_type, disposition, severity, evidence
+                ) values (:id, :workspace, :run, :type, :disposition, :severity, :evidence)
+                """, new MapSqlParameterSource()
+                .addValue("id", UUID.randomUUID())
+                .addValue("workspace", workspaceId)
+                .addValue("run", runId)
+                .addValue("type", type)
+                .addValue("disposition", disposition)
+                .addValue("severity", severity)
+                .addValue("evidence", Jsons.jsonb(Jsons.write(mapper, evidence))));
+    }
+
     private void enqueueEvaluation(UUID runId) {
+        Integer explicit = jdbc.queryForObject(
+                "select count(*)::int from evaluation_results where product_run_id = :id",
+                Map.of("id", runId), Integer.class);
+        if (explicit != null && explicit > 0) {
+            return;
+        }
         var span = tracer.nextSpan().name("aegistrace.evaluation.enqueue").start();
         try {
             UUID workspaceId = jdbc.queryForObject("select workspace_id from agent_runs where id = :id", Map.of("id", runId), UUID.class);
@@ -817,6 +978,36 @@ public class RunService {
         } finally {
             span.end();
         }
+    }
+
+    private void enqueueExplicitEvaluation(UUID runId) {
+        var rows = jdbc.query("""
+                select r.id as result_id, e.workspace_id
+                from evaluation_results r
+                join evaluation_executions e on e.id = r.execution_id
+                where r.product_run_id = :run and r.status = 'RUNNING'
+                """, Map.of("run", runId), (rs, n) -> new UUID[]{
+                UUID.fromString(rs.getString("result_id")),
+                UUID.fromString(rs.getString("workspace_id"))
+        });
+        if (rows.isEmpty()) {
+            return;
+        }
+        UUID resultId = rows.get(0)[0];
+        UUID workspaceId = rows.get(0)[1];
+        var payload = new LinkedHashMap<String, Object>();
+        payload.put("runId", runId);
+        payload.put("evaluationResultId", resultId);
+        putTrace(payload, runId);
+        jdbc.update("""
+                insert into jobs (id, workspace_id, job_type, payload, status, max_attempts, idempotency_key)
+                values (:id, :workspace, 'EVALUATE_CASE', :payload, 'PENDING', 3, :key)
+                on conflict (idempotency_key) do nothing
+                """, new MapSqlParameterSource()
+                .addValue("id", UUID.randomUUID())
+                .addValue("workspace", workspaceId)
+                .addValue("payload", Jsons.jsonb(Jsons.write(mapper, payload)))
+                .addValue("key", "evaluation-result:" + resultId));
     }
 
     public static String visibilitySql(String role) {
@@ -1040,6 +1231,28 @@ public class RunService {
         }
         if (agentId == null && rows.size() != 1) {
             throw new ApiException("AGENT_REQUIRED", "agentId is required when more than one agent is active.", 400);
+        }
+        return rows.get(0);
+    }
+
+    private AgentVersion loadSpecificVersion(UUID workspaceId, UUID versionId) {
+        var rows = jdbc.query("""
+                select a.id as agent_id, av.id, av.prompt_version_id, av.knowledge_base_id, av.provider, av.model,
+                       av.snapshot::text as snapshot
+                from agent_versions av
+                join agents a on a.id = av.agent_id
+                where av.id = :version and a.workspace_id = :workspace
+                """, Map.of("version", versionId, "workspace", workspaceId), (rs, n) -> new AgentVersion(
+                UUID.fromString(rs.getString("agent_id")),
+                UUID.fromString(rs.getString("id")),
+                UUID.fromString(rs.getString("prompt_version_id")),
+                UUID.fromString(rs.getString("knowledge_base_id")),
+                rs.getString("provider"),
+                rs.getString("model"),
+                Jsons.map(mapper, rs.getString("snapshot"))
+        ));
+        if (rows.isEmpty()) {
+            throw new ApiException("NOT_FOUND", "Agent version not found.", 404);
         }
         return rows.get(0);
     }

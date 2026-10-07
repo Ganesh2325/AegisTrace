@@ -40,8 +40,10 @@ public class AgentService {
                        av.id as version_id, av.version_number, av.model, av.provider,
                        kb.name as knowledge_name,
                        (select count(*) from agent_version_tools avt where avt.agent_version_id = av.id) as tool_count,
-                       (select count(*) from agent_runs r where r.agent_id = a.id) as run_count,
-                       (select max(r.created_at) from agent_runs r where r.agent_id = a.id) as last_run_at,
+                       (select count(*) from agent_runs r where r.agent_id = a.id
+                         and not exists (select 1 from evaluation_results er_scope where er_scope.product_run_id = r.id)) as run_count,
+                       (select max(r.created_at) from agent_runs r where r.agent_id = a.id
+                         and not exists (select 1 from evaluation_results er_scope where er_scope.product_run_id = r.id)) as last_run_at,
                        (select max(v.created_at) from agent_versions v where v.agent_id = a.id) as last_version_at
                 from agents a
                 left join agent_versions av on av.agent_id = a.id and av.current_version
@@ -426,6 +428,7 @@ public class AgentService {
                        max(r.created_at) as last_run_at
                 from agent_runs r
                 where r.agent_id = :id and r.workspace_id = :workspace
+                  and not exists (select 1 from evaluation_results er_scope where er_scope.product_run_id = r.id)
                 """, Map.of("id", agentId, "workspace", workspaceId), (rs, n) -> {
             var row = new LinkedHashMap<String, Object>();
             long runs = rs.getLong("run_count");
@@ -455,6 +458,7 @@ public class AgentService {
                 from agent_runs r
                 join agent_versions av on av.id = r.agent_version_id
                 where r.agent_id = :agent and r.workspace_id = :workspace
+                  and not exists (select 1 from evaluation_results er_scope where er_scope.product_run_id = r.id)
                 """ + com.aegistrace.run.RunService.visibilitySql(role) + """
                 order by r.created_at desc
                 limit 10
