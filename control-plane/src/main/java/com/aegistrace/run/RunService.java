@@ -1125,7 +1125,8 @@ public class RunService {
         return switch (role) {
             case "OPERATOR" -> " and r.user_id = :user ";
             case "REVIEWER" -> " and exists (select 1 from approvals vis where vis.run_id = r.id) ";
-            default -> " ";
+            case "DEVELOPER", "ADMIN" -> " ";
+            default -> " and false ";
         };
     }
 

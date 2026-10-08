@@ -1,3 +1,9 @@
+springdoc:
+  api-docs:
+    enabled: false
+  swagger-ui:
+    enabled: false
+
 aegis:
   seed-enabled: false
   failure-simulation-enabled: false

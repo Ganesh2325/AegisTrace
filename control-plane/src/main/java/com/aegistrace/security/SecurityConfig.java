@@ -2,7 +2,7 @@ package com.aegistrace.security;
 
 import com.aegistrace.common.CorrelationFilter;
 import com.aegistrace.common.OriginFilter;
-import com.aegistrace.security.InternalTokenFilter;
+import com.aegistrace.config.AppProperties;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -24,17 +24,27 @@ class SecurityConfig {
 
     @Bean
     SecurityFilterChain filterChain(HttpSecurity http, JwtAuthFilter jwtAuthFilter, InternalTokenFilter internalTokenFilter,
-                                    OriginFilter originFilter, CorrelationFilter correlationFilter) throws Exception {
+                                    OriginFilter originFilter, CorrelationFilter correlationFilter,
+                                    SecurityHeadersFilter securityHeadersFilter, AppProperties properties) throws Exception {
         http
                 .csrf(AbstractHttpConfigurer::disable)
                 .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-                .authorizeHttpRequests(auth -> auth
-                        .requestMatchers("/liveness", "/readiness", "/health").permitAll()
-                        .requestMatchers("/actuator/health", "/actuator/health/**", "/actuator/prometheus", "/actuator/info").permitAll()
-                        .requestMatchers("/swagger-ui.html", "/swagger-ui/**", "/v3/api-docs/**").permitAll()
-                        .requestMatchers(HttpMethod.POST, "/api/v1/auth/login").permitAll()
-                        .requestMatchers("/internal/**").hasRole("INTERNAL")
-                        .anyRequest().authenticated())
+                .exceptionHandling(ex -> ex.authenticationEntryPoint((request, response, authException) -> {
+                    response.setStatus(401);
+                    response.setContentType("application/json");
+                    response.getWriter().write("{\"code\":\"UNAUTHENTICATED\",\"message\":\"Authentication is required.\"}");
+                }))
+                .authorizeHttpRequests(auth -> {
+                    auth.requestMatchers("/liveness", "/readiness", "/health").permitAll()
+                            .requestMatchers("/actuator/health", "/actuator/health/**", "/actuator/prometheus", "/actuator/info").permitAll()
+                            .requestMatchers(HttpMethod.POST, "/api/v1/auth/login").permitAll();
+                    if (!properties.isProduction()) {
+                        auth.requestMatchers("/swagger-ui.html", "/swagger-ui/**", "/v3/api-docs/**").permitAll();
+                    }
+                    auth.requestMatchers("/internal/**").hasRole("INTERNAL")
+                            .anyRequest().authenticated();
+                })
+                .addFilterBefore(securityHeadersFilter, UsernamePasswordAuthenticationFilter.class)
                 .addFilterBefore(correlationFilter, UsernamePasswordAuthenticationFilter.class)
                 .addFilterBefore(originFilter, UsernamePasswordAuthenticationFilter.class)
                 .addFilterBefore(internalTokenFilter, UsernamePasswordAuthenticationFilter.class)
@@ -59,6 +69,11 @@ class SecurityConfig {
 
     @Bean
     FilterRegistrationBean<JwtAuthFilter> jwtFilterRegistration(JwtAuthFilter filter) {
+        return disabled(filter);
+    }
+
+    @Bean
+    FilterRegistrationBean<SecurityHeadersFilter> securityHeadersFilterRegistration(SecurityHeadersFilter filter) {
         return disabled(filter);
     }
 

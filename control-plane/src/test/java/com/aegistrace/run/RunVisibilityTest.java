@@ -50,6 +50,15 @@ class RunVisibilityTest {
     }
 
     @Test
+    void unknownRoleIsDenied() {
+        ApiException ex = assertThrows(ApiException.class, () ->
+                RunVisibility.assertVisible("OWNER", otherUser, owner, workspace, workspace, true));
+        assertEquals(403, ex.getStatus());
+        assertEquals(" and false ", RunService.visibilitySql("OWNER"));
+        assertEquals(" ", RunService.visibilitySql("ADMIN"));
+    }
+
+    @Test
     void developerAndAdminCanReadAnyWorkspaceRun() {
         RunVisibility.assertVisible("DEVELOPER", otherUser, owner, workspace, workspace, false);
         RunVisibility.assertVisible("ADMIN", otherUser, owner, workspace, workspace, false);

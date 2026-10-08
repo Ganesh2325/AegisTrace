@@ -91,6 +91,10 @@ services:
       - prometheus
 
   control-plane:
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     build:
       context: ./control-plane
     environment:
@@ -132,6 +136,10 @@ services:
       retries: 30
 
   agent-runtime:
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     build:
       context: .
       dockerfile: agent-runtime/Dockerfile
@@ -157,6 +165,10 @@ services:
       retries: 20
 
   worker:
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     build:
       context: .
       dockerfile: worker/Dockerfile
@@ -186,6 +198,10 @@ services:
       retries: 20
 
   frontend:
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     build:
       context: ./frontend
       args:

@@ -15,6 +15,9 @@ public final class RunVisibility {
         if (runWorkspace == null || !runWorkspace.equals(requestWorkspace)) {
             throw new ApiException("NOT_FOUND", "Run not found.", 404);
         }
+        if (!Set.of("OPERATOR", "REVIEWER", "DEVELOPER", "ADMIN").contains(role)) {
+            throw new ApiException("FORBIDDEN", "Your role cannot perform this action.", 403);
+        }
         if ("OPERATOR".equals(role) && !actorId.equals(ownerId)) {
             throw new ApiException("FORBIDDEN", "Operators can only inspect their own runs.", 403);
         }

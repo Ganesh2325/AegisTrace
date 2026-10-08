@@ -5,6 +5,7 @@ import com.aegistrace.common.ApiException;
 import com.aegistrace.common.Jsons;
 import com.aegistrace.runtime.RuntimeClient;
 import com.aegistrace.security.Actor;
+import com.aegistrace.security.RequestRateLimiter;
 import com.aegistrace.storage.ObjectStore;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
@@ -34,15 +35,17 @@ public class KnowledgeService {
     private final ObjectMapper mapper;
     private final AuditService audit;
     private final RuntimeClient runtime;
+    private final RequestRateLimiter rateLimiter;
 
     public KnowledgeService(NamedParameterJdbcTemplate jdbc, TransactionTemplate tx, ObjectStore objects,
-                            ObjectMapper mapper, AuditService audit, RuntimeClient runtime) {
+                            ObjectMapper mapper, AuditService audit, RuntimeClient runtime, RequestRateLimiter rateLimiter) {
         this.jdbc = jdbc;
         this.tx = tx;
         this.objects = objects;
         this.mapper = mapper;
         this.audit = audit;
         this.runtime = runtime;
+        this.rateLimiter = rateLimiter;
     }
 
     public List<Map<String, Object>> listBases(UUID workspaceId) {
@@ -203,11 +206,12 @@ public class KnowledgeService {
     public Map<String, Object> upload(Actor actor, UUID workspaceId, UUID knowledgeBaseId, String title, String originalName,
                                       String declaredType, byte[] bytes) {
         ensureBase(workspaceId, knowledgeBaseId);
+        rateLimiter.acquire("upload:" + actor.id(), 20);
         var file = KnowledgeFiles.validate(originalName, declaredType, bytes);
         UUID documentId = UUID.randomUUID();
         String key = "documents/" + workspaceId + "/" + knowledgeBaseId + "/" + file.checksumSha256();
         objects.put(key, bytes, file.mediaType());
-        String resolvedTitle = title == null || title.isBlank() ? fallbackTitle(originalName) : title.trim();
+        String resolvedTitle = displayTitle(title, originalName);
         tx.executeWithoutResult(status -> {
             jdbc.query("select pg_advisory_xact_lock(hashtextextended(:key, 0))",
                     Map.of("key", "document:" + knowledgeBaseId + ":" + file.checksumSha256()), rs -> null);
@@ -347,7 +351,8 @@ public class KnowledgeService {
         });
     }
 
-    public Map<String, Object> retrieve(UUID workspaceId, UUID knowledgeBaseId, String query, String versionId, Integer topK) {
+    public Map<String, Object> retrieve(Actor actor, UUID workspaceId, UUID knowledgeBaseId, String query, String versionId, Integer topK) {
+        rateLimiter.acquire("retrieval:" + actor.id(), 120);
         var base = ensureBase(workspaceId, knowledgeBaseId);
         if (query == null || query.isBlank()) {
             throw new ApiException("VALIDATION_FAILED", "A retrieval query is required.", 400);
@@ -488,9 +493,18 @@ public class KnowledgeService {
         return value == null || value.isBlank();
     }
 
-    private static String fallbackTitle(String originalName) {
-        if (originalName == null || originalName.isBlank()) return "Untitled document";
-        int slash = Math.max(originalName.lastIndexOf('/'), originalName.lastIndexOf('\\'));
-        return originalName.substring(slash + 1);
+    public static String displayTitle(String title, String originalName) {
+        String source;
+        if (title != null && !title.isBlank()) {
+            source = title;
+        } else if (originalName == null || originalName.isBlank()) {
+            return "Untitled document";
+        } else {
+            int slash = Math.max(originalName.lastIndexOf('/'), originalName.lastIndexOf('\\'));
+            source = originalName.substring(slash + 1);
+        }
+        String cleaned = source.replace("\u0000", "").replaceAll("\\p{Cntrl}", "").trim();
+        if (cleaned.length() > 200) cleaned = cleaned.substring(0, 200).trim();
+        return cleaned.isBlank() ? "Untitled document" : cleaned;
     }
 }

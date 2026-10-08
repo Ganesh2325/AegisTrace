@@ -82,7 +82,7 @@ class KnowledgeController {
     @PostMapping("/api/v1/knowledge-bases/{id}/retrieval")
     Map<String, Object> retrieve(HttpServletRequest request, @PathVariable UUID id, @RequestBody RetrieveBody body) {
         var membership = rbac.require(request, READ);
-        return knowledge.retrieve(membership.workspaceId(), id, body.query(), body.knowledgeBaseVersionId(), body.topK());
+        return knowledge.retrieve(rbac.current(), membership.workspaceId(), id, body.query(), body.knowledgeBaseVersionId(), body.topK());
     }
 
     @GetMapping("/api/v1/documents/{id}")
