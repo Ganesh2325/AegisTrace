@@ -4,7 +4,13 @@ springdoc:
   swagger-ui:
     enabled: false
 
+management:
+  server:
+    port: 8081
+
 aegis:
   seed-enabled: false
   failure-simulation-enabled: false
   cookie-secure: true
+  redis:
+    enabled: true

@@ -4,6 +4,13 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   java:
     runs-on: ubuntu-latest
@@ -71,3 +78,66 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: python scripts/scan_secrets.py
+      - run: python scripts/check_release_config.py
+
+  dependencies:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm install
+        working-directory: frontend
+      - run: npm audit --omit=dev
+        working-directory: frontend
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Audit Python service packages
+        run: |
+          pip install -q pip-audit fastapi uvicorn httpx "psycopg[binary]" pypdf boto3 opentelemetry-api opentelemetry-sdk opentelemetry-exporter-otlp-proto-http
+          pip-audit --format json --progress-spinner off > "$RUNNER_TEMP/pip-audit.json" || true
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          import os
+          findings = json.loads(Path(os.environ["RUNNER_TEMP"], "pip-audit.json").read_text())
+          deps = findings.get("dependencies", [])
+          unexpected = [dep for dep in deps if dep.get("name") != "pip" and dep.get("vulns")]
+          if unexpected:
+              raise SystemExit("Python service dependencies have vulnerabilities")
+          print("python dependency audit: service packages clean")
+          PY
+
+  terraform:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker run --rm -v "$PWD/infrastructure/aws:/workspace" -w /workspace hashicorp/terraform:1.9.8 init -backend=false
+      - run: docker run --rm -v "$PWD/infrastructure/aws:/workspace" -w /workspace hashicorp/terraform:1.9.8 validate
+
+  images:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: control-plane
+            file: control-plane/Dockerfile
+            context: control-plane
+          - name: frontend
+            file: frontend/Dockerfile
+            context: frontend
+          - name: runtime
+            file: agent-runtime/Dockerfile
+            context: .
+          - name: worker
+            file: worker/Dockerfile
+            context: .
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: docker build -f ${{ matrix.file }} -t aegistrace-${{ matrix.name }}:ci ${{ matrix.context }}
+      - name: Scan critical vulnerabilities
+        run: docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.58.1 image --severity CRITICAL --exit-code 1 aegistrace-${{ matrix.name }}:ci

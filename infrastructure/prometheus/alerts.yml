@@ -1,0 +1,35 @@
+groups:
+  - name: aegistrace
+    rules:
+      - alert: ControlPlaneDown
+        expr: up{job="control-plane"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Control plane metrics scrape is down
+          action: Check task health and database connectivity. A started container is not recovery.
+      - alert: ControlPlaneErrors
+        expr: sum(rate(http_server_requests_seconds_count{status=~"5.."}[5m])) / clamp_min(sum(rate(http_server_requests_seconds_count[5m])), 0.001) > 0.05
+        for: 5m
+        labels:
+          severity: high
+        annotations:
+          summary: Control plane server errors are above 5 percent
+          action: Read correlated logs for the failing route. Roll back when the errors began with the current deployment.
+      - alert: ControlPlaneLatency
+        expr: histogram_quantile(0.95, sum by (le) (rate(http_server_requests_seconds_bucket[5m]))) > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Control plane p95 latency is above one second
+          action: Check the database pool and runtime dependency before adding capacity.
+      - alert: DatabasePoolWaiting
+        expr: hikaricp_connections_pending > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Requests are waiting for a database connection
+          action: Inspect slow statements and connection count. The pool limit is intentional.

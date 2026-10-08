@@ -12,15 +12,17 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from aegislib.embedding import embed, to_pgvector
+from aegislib.production import database_url, enforce as enforce_production
 from aegislib.grounding import grounded_answer, injection_signals, rank_chunks
 from aegislib.planner import merge_model_proposal
 from aegislib.telemetry import configure, consumer_context, span
 
 configure("agent-runtime")
+enforce_production(os.environ)
 
 app = FastAPI(title="AegisTrace agent runtime", telemetry={"auto_configure": False})
 TOKEN = os.environ.get("AEGIS_INTERNAL_TOKEN", "")
-DATABASE_URL = os.environ.get("DATABASE_URL", "")
+DATABASE_URL = database_url(os.environ)
 
 
 class PlanRequest(BaseModel):
@@ -69,6 +71,8 @@ def readiness():
 def plan(body: PlanRequest, x_internal_token: str = Header(default=""), traceparent: str | None = Header(default=None)):
     if TOKEN and x_internal_token != TOKEN:
         raise HTTPException(status_code=401, detail="Internal token is invalid.")
+    if body.simulate and os.environ.get("AEGIS_ENVIRONMENT", "dev").lower() in {"prod", "production"}:
+        raise HTTPException(status_code=400, detail="Failure simulation is disabled.")
     if body.simulate == "model_timeout":
         time.sleep(30)
     parent = consumer_context_from_header(traceparent)

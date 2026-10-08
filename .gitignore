@@ -42,3 +42,9 @@ Thumbs.db
 # Local object storage
 .minio-data/
 data/
+
+# Terraform local state and provider cache. The lock file is committed.
+infrastructure/aws/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars

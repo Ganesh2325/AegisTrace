@@ -19,6 +19,7 @@ from botocore.client import Config
 from psycopg.rows import dict_row
 
 from aegislib.chunking import chunk_pages, normalize_text
+from aegislib.production import database_url, enforce as enforce_production
 from aegislib.embedding import MODEL_ID, embed, to_pgvector
 from aegislib.execution import ExecutionError, execute_ticket
 from aegislib.evaluation import evaluate_product_run
@@ -27,7 +28,7 @@ from aegislib.telemetry import configure, consumer_context, current_traceparent,
 
 configure("worker")
 
-DATABASE_URL = os.environ["DATABASE_URL"]
+DATABASE_URL = database_url(os.environ)
 TOKEN = os.environ.get("AEGIS_INTERNAL_TOKEN", "")
 CONTROL_PLANE = os.environ.get("CONTROL_PLANE_URL", "http://control-plane:8080")
 SEED_DIR = Path(os.environ.get("SEED_DIR", "/seed"))
@@ -37,6 +38,9 @@ MAX_DOCUMENT_BYTES = 10 * 1024 * 1024
 
 
 def main() -> None:
+    effective = os.environ.copy()
+    effective["SEED_KNOWLEDGE"] = os.environ.get("SEED_KNOWLEDGE", "true")
+    enforce_production(effective)
     threading.Thread(target=_health, daemon=True).start()
     wait_for_db()
     if os.environ.get("SEED_KNOWLEDGE", "true").lower() == "true":
@@ -481,19 +485,21 @@ def download(key: str) -> bytes:
 
 
 def s3():
-    return boto3.client(
-        "s3",
-        endpoint_url=os.environ.get("S3_ENDPOINT"),
-        aws_access_key_id=os.environ.get("S3_ACCESS_KEY"),
-        aws_secret_access_key=os.environ.get("S3_SECRET_KEY"),
-        region_name=os.environ.get("S3_REGION", "us-east-1"),
-        config=Config(
-            s3={"addressing_style": "path"},
+    endpoint = os.environ.get("S3_ENDPOINT", "").strip()
+    kwargs = {
+        "region_name": os.environ.get("S3_REGION", "us-east-1"),
+        "config": Config(
             connect_timeout=3,
             read_timeout=15,
             retries={"total_max_attempts": 3, "mode": "standard"},
+            **({"s3": {"addressing_style": "path"}} if endpoint else {}),
         ),
-    )
+    }
+    if endpoint:
+        kwargs["endpoint_url"] = endpoint
+        kwargs["aws_access_key_id"] = os.environ.get("S3_ACCESS_KEY")
+        kwargs["aws_secret_access_key"] = os.environ.get("S3_SECRET_KEY")
+    return boto3.client("s3", **kwargs)
 
 
 def seed_knowledge() -> None:

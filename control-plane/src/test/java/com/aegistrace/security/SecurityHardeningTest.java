@@ -48,4 +48,14 @@ class SecurityHardeningTest {
         assertEquals(429, ex.getStatus());
         assertEquals("RATE_LIMITED", ex.getCode());
     }
+
+    @Test
+    void sharedCounterEnforcesOneLimitAcrossInstances() {
+        var counter = new RequestRateLimiter.MemoryCounter();
+        var first = new RequestRateLimiter(counter);
+        var second = new RequestRateLimiter(counter);
+        first.acquire("upload:user", 1);
+        ApiException ex = assertThrows(ApiException.class, () -> second.acquire("upload:user", 1));
+        assertEquals(429, ex.getStatus());
+    }
 }

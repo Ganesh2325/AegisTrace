@@ -1,0 +1,55 @@
+name: deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require the environment role
+        env:
+          ROLE: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          REGION: ${{ vars.AWS_REGION }}
+          CLUSTER: ${{ vars.ECS_CLUSTER }}
+        run: |
+          if [ -z "$ROLE" ] || [ -z "$REGION" ] || [ -z "$CLUSTER" ]; then
+            echo "This environment has no AWS deployment role, region, or cluster."
+            exit 1
+          fi
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Deploy and wait for stability
+        env:
+          CLUSTER: ${{ vars.ECS_CLUSTER }}
+        run: |
+          services="frontend control-plane runtime worker"
+          for service in $services; do
+            aws ecs update-service --cluster "$CLUSTER" --service "$service" --force-new-deployment >/dev/null
+          done
+          aws ecs wait services-stable --cluster "$CLUSTER" --services $services
+      - name: Smoke gate
+        env:
+          SMOKE_URL: ${{ vars.SMOKE_URL }}
+        run: |
+          if [ -z "$SMOKE_URL" ]; then
+            echo "SMOKE_URL is not configured."
+            exit 1
+          fi
+          python scripts/release_gate.py --url "$SMOKE_URL/readiness"

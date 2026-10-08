@@ -18,6 +18,8 @@ public class AppProperties {
     private String jaegerQueryUrl = "";
     private String jaegerPublicUrl = "http://localhost:16686";
     private String prometheusUrl = "";
+    private String releaseSha = "";
+    private String imageDigest = "";
 
     public String getJwtSecret() { return jwtSecret; }
     public void setJwtSecret(String jwtSecret) { this.jwtSecret = jwtSecret; }
@@ -47,6 +49,10 @@ public class AppProperties {
     public void setJaegerPublicUrl(String jaegerPublicUrl) { this.jaegerPublicUrl = jaegerPublicUrl; }
     public String getPrometheusUrl() { return prometheusUrl; }
     public void setPrometheusUrl(String prometheusUrl) { this.prometheusUrl = prometheusUrl; }
+    public String getReleaseSha() { return releaseSha; }
+    public void setReleaseSha(String releaseSha) { this.releaseSha = releaseSha; }
+    public String getImageDigest() { return imageDigest; }
+    public void setImageDigest(String imageDigest) { this.imageDigest = imageDigest; }
 
     public boolean isProduction() {
         return "prod".equalsIgnoreCase(environment) || "production".equalsIgnoreCase(environment);

@@ -2,6 +2,7 @@ package com.aegistrace.seed;
 
 import com.aegistrace.common.Jsons;
 import com.aegistrace.config.AppProperties;
+import com.aegistrace.config.ProductionGuard;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
@@ -54,9 +55,7 @@ public class DevSeedRunner implements ApplicationRunner {
 
     @Override
     public void run(ApplicationArguments args) {
-        if (properties.isProduction() && (properties.isSeedEnabled() || containsDefaultSecret())) {
-            throw new IllegalStateException("Refusing to start production with seed data or default secrets");
-        }
+        ProductionGuard.failIfUnsafe(properties, System.getenv());
         if (!properties.isSeedEnabled()) {
             return;
         }
@@ -167,7 +166,4 @@ public class DevSeedRunner implements ApplicationRunner {
                 .addValue("idempotent", idempotent));
     }
 
-    private boolean containsDefaultSecret() {
-        return properties.getJwtSecret().contains("change-me") || properties.getInternalToken().contains("change-me");
-    }
 }

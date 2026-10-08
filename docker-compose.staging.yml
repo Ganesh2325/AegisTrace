@@ -1,0 +1,14 @@
+# Local staging shape. It is not a cloud environment and it does not replace the running development stack.
+services:
+  control-plane:
+    environment:
+      AEGIS_ENVIRONMENT: staging
+      AEGIS_SEED_ENABLED: "false"
+      AEGIS_FAILURE_SIMULATION: "false"
+  agent-runtime:
+    environment:
+      AEGIS_ENVIRONMENT: staging
+  worker:
+    environment:
+      AEGIS_ENVIRONMENT: staging
+      SEED_KNOWLEDGE: "false"

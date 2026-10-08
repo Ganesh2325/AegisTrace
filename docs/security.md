@@ -76,4 +76,4 @@ Application images run as non-root users and drop all Linux capabilities with `n
 
 IMPLEMENTED. Login attempts, support-run creation, document uploads (20 per user per minute), and retrieval (120 per user per minute) are bounded. Uploads are limited to 10 MB. Retrieval queries, result counts, trace spans, event histories, worker concurrency, and the run executor queue retain their existing limits. Excess requests fail with HTTP 429 or the existing validation and queue errors. They are not reported as success.
 
-LIMITATION. The new upload and retrieval limits are in-memory for each control-plane process. A shared limiter for multiple instances is deferred to cloud deployment.
+When Redis is enabled, upload and retrieval limits use one shared counter. Production refuses to start when Redis is disabled, so more than one control-plane task cannot keep separate counters. Development without Redis keeps the in-process counter.

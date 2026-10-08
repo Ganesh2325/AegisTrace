@@ -90,6 +90,16 @@ class PlatformController {
         ));
     }
 
+    @GetMapping("/admin/release")
+    Map<String, Object> release(HttpServletRequest request) {
+        rbac.require(request, "ADMIN");
+        var body = new LinkedHashMap<String, Object>();
+        body.put("environment", properties.getEnvironment());
+        body.put("releaseSha", properties.getReleaseSha() == null ? "" : properties.getReleaseSha());
+        body.put("imageDigest", properties.getImageDigest() == null ? "" : properties.getImageDigest());
+        return body;
+    }
+
     @GetMapping("/admin/users")
     List<Map<String, Object>> users(HttpServletRequest request) {
         var membership = rbac.require(request, "ADMIN");

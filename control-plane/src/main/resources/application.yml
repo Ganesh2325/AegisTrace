@@ -5,6 +5,8 @@ server:
     max-swallow-size: 12MB
 
 spring:
+  profiles:
+    active: ${AEGIS_ENVIRONMENT:dev}
   application:
     name: control-plane
   servlet:
@@ -62,6 +64,8 @@ aegis:
   jaeger-query-url: ${JAEGER_QUERY_URL:}
   jaeger-public-url: ${JAEGER_PUBLIC_URL:http://localhost:16686}
   prometheus-url: ${PROMETHEUS_URL:}
+  release-sha: ${AEGIS_RELEASE_SHA:}
+  image-digest: ${AEGIS_IMAGE_DIGEST:}
   redis:
     enabled: ${REDIS_ENABLED:false}
     host: ${REDIS_HOST:localhost}
