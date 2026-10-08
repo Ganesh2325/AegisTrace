@@ -1,0 +1,3 @@
+# XsltView path handling. The control plane is a JSON API and does not render XSLT views.
+# The open-source fix is Spring Framework 7, which is a different application generation.
+CVE-2026-47884

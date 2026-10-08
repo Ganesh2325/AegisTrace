@@ -13,7 +13,9 @@
 - Terraform init and validate
 - image build and critical vulnerability scan for the frontend, control plane, runtime, and worker
 
-A critical image finding fails the workflow. The accepted Tailwind `braces` finding is build-time tooling. The production frontend image is the standalone server, and the production npm audit is the dependency gate.
+A critical image finding fails the workflow. `.trivyignore` contains one control-plane exception, `CVE-2026-47884`. It applies to Spring MVC `XsltView`, which this API does not use. The open-source fix is Spring Framework 7. Netty is pinned to 4.1.138.Final and Tomcat to 10.1.60 on Spring Boot 3.5.16 so the other critical findings in that scan have fixed builds.
+
+The accepted Tailwind `braces` finding is build-time tooling. The production frontend image is the standalone server, and the production npm audit is the dependency gate.
 
 ## Deployment
 

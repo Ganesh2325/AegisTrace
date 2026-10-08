@@ -140,4 +140,4 @@ jobs:
       - name: Build
         run: docker build -f ${{ matrix.file }} -t aegistrace-${{ matrix.name }}:ci ${{ matrix.context }}
       - name: Scan critical vulnerabilities
-        run: docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.58.1 image --severity CRITICAL --exit-code 1 aegistrace-${{ matrix.name }}:ci
+        run: docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$PWD/.trivyignore:/.trivyignore:ro" aquasec/trivy:0.58.1 image --severity CRITICAL --exit-code 1 --ignorefile /.trivyignore aegistrace-${{ matrix.name }}:ci
