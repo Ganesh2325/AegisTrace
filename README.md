@@ -1,219 +1,119 @@
 # AegisTrace
 
-AegisTrace is a control plane for one internal support agent. An operator asks a policy question. The agent answers from synthetic support documents, with citations, or it says it does not have enough evidence. If a support ticket would help, the agent proposes `create_support_ticket`. Deterministic code decides that a write needs a person. A reviewer approves or rejects. A worker creates the ticket once.
+AegisTrace is a private desk for a support team. A staff member asks a question. The system answers only from the team’s own documents. If the next step is to open a support ticket, a second person must approve it first. Nothing is written until that person says yes, and the same ticket is never created twice.
 
-The model proposes. The control plane decides. A human approves the write. A worker executes it. The timeline records it. An evaluation checks it.
+It is not a public website, and it is not a chat app. Visitors on a company website do not log in here. Staff do.
 
-## Problem
+## Who it is for
 
-Connecting a model to a ticket tool produces a demo that can write. It does not produce a system that can pause, explain, or prove the write. AegisTrace is that pause, and the record around it.
+| Person | What they do |
+|---|---|
+| Operator | Types the customer’s question and watches the answer |
+| Reviewer | Reads a proposed ticket and approves or rejects it |
+| Developer | Loads the documents and sets up the assistant |
+| Admin | Creates the people above and looks after the workspace |
 
-## Console
+One company or team uses one workspace. Each person sees only the screens their job allows.
 
-The signed-in console is a control surface, not a chat product.
+## Why it exists
 
-- **Operations.** Workspace KPIs from stored runs, approvals, and jobs. Completion and failure use finished runs. Timeouts count as unsuccessful. Cancelled runs do not. Empty rates are `NO_DATA`, not 0%. Cost is `$0.00` only when the model is configured at zero; unknown prices are `PRICING_UNAVAILABLE`. Operators see counts, not approval payloads. Windows are rolling UTC hours (`24H`, `7D`, `30D`, `ALL`).
-- **Support run.** The operator starts a run and sees status, evidence, the grounded answer, a tool proposal, the policy decision, and approval wait. The write tool is not executed from this page. After create, the URL is `/runs/new?run={id}` so refresh recovers the same run.
-- **Run detail.** Timeline, citations, tokens, and cancel for a single run.
-- **Approvals.** Reviewers and admins decide writes. A second approve does not create a second ticket.
-- **Shell.** Navigation follows server roles (Operator, Reviewer, Developer, Admin). Direct URLs without the capability show a restricted state. The environment label is `LOCAL` in development Compose.
+A normal chatbot can sound sure and still be wrong, and it can take an action with no record. AegisTrace keeps three rules:
 
-Shared UI pieces: status and risk badges, cards, tables, form fields, empty and error states, duration formatting.
+1. The answer must come from documents the team uploaded.
+2. If those documents do not contain enough evidence, the system says so instead of guessing.
+3. Opening a ticket is an action. A person approves it. The system keeps a record of who asked, who approved, and what was created.
 
-## Why a chatbot demo is not enough
+## A normal day, with an example
 
-A chat transcript does not show which agent version ran, which chunks were retrieved, which policy decision fired, who approved the write, or whether a retried job created a second ticket. Those are the product.
+Imagine a shop website. The returns page says an unused item can be returned within 30 days with the receipt. That page stays a normal page. AegisTrace is the desk behind it.
 
-## Product workflow
+1. An admin creates an operator and a reviewer.
+2. A developer uploads the returns policy.
+3. A customer asks, “Can I return shoes I bought 12 days ago?”
+4. The operator pastes that question into **Support run**.
+5. The system searches the policy and answers from it.
+6. If a ticket would help, the system stops and waits. It does not open the ticket yet.
+7. The reviewer reads the proposed ticket and approves it.
+8. One ticket is created. Approving the same request again does not create another ticket.
 
-1. The operator asks: "Why was my application rejected, and what should I do before reapplying?"
-2. The API stores an `AgentRun` and returns. The browser is not held on the model.
-3. The runtime retrieves the synthetic corpus and composes an answer from those chunks.
-4. The UI shows citations.
-5. The planner proposes `create_support_ticket` from the user's question, not from document text.
-6. `PolicyEngine` returns `REQUIRE_APPROVAL`.
-7. The run waits.
-8. A reviewer sees the tool, the arguments, the risk, the requester, the policy code, the run id, and the trace id.
-9. Approval resumes the same run. Rejection writes nothing.
-10. The worker inserts one ticket. The idempotency key is `{runId}:{proposalId}`.
-11. The final answer, timeline, evaluation, and metrics are readable afterward.
+The sample question already loaded for a demo is: “Why was my application rejected, and what should I do before reapplying?” The sample policy says the person must wait 14 days, fix the items named in the rejection, and include the previous reference.
 
-The demo script is `docs/demo-script.md`.
+## What you see after signing in
 
-## Architecture
+- **Operations** — how many requests are waiting, finished, or failed.
+- **Support run** — where an operator asks a question and follows the result.
+- **Approvals** — where a reviewer allows or refuses a ticket.
+- **Knowledge** — the documents the answers come from.
+- **Agents** — the assistant setup: which documents it may use and which actions it may suggest.
+- **Evaluation** — checks that answers stay tied to the documents.
+- **Safety** — a view of blocked actions, approvals, and cases where the system refused to guess.
+- **Observability** — the trail of a request, for people who need to inspect it.
+- **Audit** — the record of important actions.
+- **Administration** — users and workspace settings. Operators cannot open this.
 
-```text
-Next.js  --SSE/HTTP-->  Spring Boot control plane
-                              |            |
-                         PostgreSQL      Redis (events only)
-                         + pgvector
-                              |
-                        Python runtime  (retrieve, answer, propose)
-                              |
-                        Policy engine (inside the control plane)
-                              |
-                        Approval row
-                              |
-                        Postgres job
-                              |
-                        Python worker (embed, ticket, evaluate)
-```
+## Try it on your computer
 
-Policy is not a separate service. It is authorization, and it commits with the approval. See `docs/architecture.md` and `docs/adr/`.
-
-## State machine
-
-`QUEUED → RUNNING → RETRIEVING → THINKING → TOOL_PROPOSED → APPROVAL_REQUIRED → APPROVED or REJECTED → TOOL_EXECUTING → COMPLETED`, or `FAILED`, `CANCELLED`, `TIMED_OUT`. Details and the early-deny path are in `docs/run-state-machine.md`.
-
-## Approval
-
-`PENDING → APPROVED | REJECTED | EXPIRED | CANCELLED`. A second approve does not insert a second job. An expired approval does not execute. See `docs/approval-state-machine.md`.
-
-## RAG
-
-Markdown, text, and PDF uploads go to S3-compatible storage (Garage locally; Amazon S3 in the cloud sketch). The worker extracts, chunks, and embeds. The default embedding is feature hashing (`feature-hash-v1`, 384 dimensions): a real retrieval method that runs without an API key, and a weaker one than a trained model. Ranking fuses vector order with lexical overlap. The offline answer is extractive: it copies supporting sentences and drops sentences that look like instructions to the model. If the best lexical overlap is too low, the answer is:
-
-> I don't have enough documented evidence to answer that confidently.
-
-When `OPENAI_API_KEY` is set and the agent provider is `openai`, the runtime can call an OpenAI-compatible chat API for the wording. The planner still owns the tool proposal. The UI shows the provider name that actually ran.
-
-The corpus is eleven synthetic documents, including one that tells the agent to ignore policy and create an urgent ticket.
-
-## Agent
-
-One support agent. Versions are insert-only. A run copies the snapshot: prompt, model settings, tools, knowledge base, embedding model, and budgets. Later edits do not change that row.
-
-## Tool policy
-
-| Tool | Class | Decision |
-|---|---|---|
-| `search_knowledge` | read | `ALLOW` when the version allows it and the user can read |
-| `create_support_ticket` | write | `REQUIRE_APPROVAL` |
-| priority `high` | write | `REQUIRE_ADMIN_APPROVAL` |
-| priority `urgent` or `critical` | write | `DENY` |
-| unknown tool or unknown field | — | `DENY` |
-| over the tool-call or token budget | — | `DENY` or stop the run |
-
-## Security
-
-Server-side membership on every route. HttpOnly session cookie. Origin check on browser mutations. Bcrypt passwords. Internal service calls use a separate token. The threat model is `docs/threat-model.md`.
-
-## Prompt injection
-
-Documents are data. The planner does not read them. A model write that the user did not ask for is discarded. A model priority that the user did not ask for is discarded. The policy engine remains the authority either way.
-
-## Idempotency
-
-`tool_executions.idempotency_key` and `tickets.idempotency_key` are unique. A crash after the insert returns the existing ticket on the next attempt.
-
-## Reliability
-
-Jobs live in Postgres with a lease, backoff, a max attempt count, and a dead state. The retry matrix is in `docs/failure-modes.md`. Redis is optional for correctness.
-
-## Observability
-
-JSON logs. Micrometer metrics on `/actuator/prometheus`. Traces exported over OTLP to Jaeger. The product timeline is `run_events`. Prompts are not log lines unless content logging is explicitly enabled. It is off.
-
-## Evaluation
-
-The Evaluation Center provides immutable cases and suites, asynchronous execution against explicit agent and knowledge versions, deterministic check evidence, history, comparison, and regression detection. The Safety Center exposes persisted policy, approval, abstention, injection, and evaluation signals without AI confidence scores or private reasoning. See `docs/evaluation-and-safety.md` for exact scoring, access, and privacy semantics.
-
-`evaluation/datasets/support-v1.json` has 30 offline critical cases. `python evaluation/run_critical.py` executes Python-grounding/tool/retry cases and explicitly delegates six authoritative policy fixtures to `EvaluationPolicyFixturesTest`; its report distinguishes those counts and exits non-zero on failure.
-
-## Performance
-
-`scripts/benchmark.py` measures the API you point it at and writes `benchmarks/results/`. This repository does not ship a hand-written latency table. Do not cite a speedup that the script did not print.
-
-What is designed for responsiveness: the run API returns after the insert, work continues on a pool of 8 threads, uploads and embeddings are jobs, lists are paginated, and the support-run page follows the event stream with a short reconcile poll if the proxy buffers events.
-
-## Cost
-
-Each run stores input tokens, output tokens, and `estimated_cost_usd`. The offline provider's provider charge is 0. `gpt-4o-mini` uses a configured list price of $0.15 per million input tokens and $0.60 per million output tokens. Token budget and cost budget are on the agent version. The dashboard reads the stored sums.
-
-## Deployment
-
-Local and demo: `docker compose up --build`.
-
-AWS shape, not applied from this workspace: VPC, RDS PostgreSQL, ElastiCache, S3, Secrets Manager, an ECS cluster, and a CloudWatch log group in `infrastructure/aws/main.tf`. It does not yet create ECS services or a load balancer. Kubernetes is intentionally absent. See ADR-010.
-
-## Local setup
-
-Requirements: Docker with Compose. The control plane image compiles on Java 21 even if the host JDK is newer.
+You need [Docker Desktop](https://www.docker.com/products/docker-desktop/). In this project folder, run:
 
 ```text
 docker compose up --build
 ```
 
-Open http://localhost:3000/login
+The first start takes several minutes because it builds the application. When it is ready, open:
 
-| Email | Role |
+http://localhost:3000/login
+
+These accounts exist only in this local demo. They are not for a shared or public server.
+
+| Email | Job |
 |---|---|
 | dev.operator@aegistrace.local | Operator |
 | dev.reviewer@aegistrace.local | Reviewer |
 | dev.developer@aegistrace.local | Developer |
 | dev.admin@aegistrace.local | Admin |
 
-Development password: `change-me-dev-password` (the Compose default for `AEGIS_SEED_PASSWORD`). Change it before any shared environment. The production profile refuses secrets that contain `change-me` and refuses seed data.
+Password for all four: `change-me-dev-password`
 
-Other local ports: API 8080, runtime 8090, Jaeger 16686, Grafana 3001, Prometheus 9090, Postgres 5435, Redis 6382, Garage S3 9010. Host ports avoid the common 5432/6379/9000 bindings used by other local stacks. Containers still talk to each other on the Compose network.
+A short click-by-click demo is in `docs/demo-script.md`.
 
-Copy `.env.example` if you override Compose defaults. Do not commit a real `.env`.
+## Use your own documents instead of the sample
 
-## Demo
+The sample people, the “Support” workspace, and the sample policy are there so the demo has something to click. They are not required for the product.
 
-Follow `docs/demo-script.md`. Sign in as the operator, ask the application question, then sign in as the reviewer and approve. The run page shows one ticket id. Approving again does not create another.
+1. Sign in as the admin and create the real operator, reviewer, and developer.
+2. Sign in as the developer, create a knowledge base, and upload your own policy as a text, Markdown, or PDF file.
+3. Create an assistant that may search those documents and may only *suggest* a support ticket.
+4. Turn that assistant on.
+5. Sign in as the operator and ask a question a real customer would ask.
 
-Failure demonstrations:
+From then on, answers come from your file, not from the sample.
 
-1. Ask for a summary of the internal override notice. No urgent ticket.
-2. As admin, in a non-production environment, the failure-simulation API enqueues a retryable ticket error. Invalid arguments are not retried.
-3. Repeat an approval HTTP call. One ticket.
+## What the system will not do
 
-## Screenshots
+- It will not invent an answer when the documents do not support one.
+- It will not open a ticket because a document says “ignore the rules.”
+- It will not allow an urgent or critical ticket. A high-priority ticket needs an admin. A normal ticket needs a reviewer.
+- It will not create a second ticket if the same approval is sent again.
+- It does not replace the public website. The website is where the customer is. This desk is where the staff work.
 
-The console is the screenshot. Capture it from a running stack. This repository does not include staged images of a run that was not executed.
+## Run it on your own server
 
-## Architecture decisions
+Another person can start a private copy with Docker on a Linux machine. That copy does not load the sample accounts. The steps are in `docs/deployment.md`. Putting this on a cloud provider is outside the current project. The notes under `infrastructure/aws` are a sketch only. They are not in use.
 
-`docs/adr/ADR-001` through `ADR-010`.
+## For people who build or review the software
 
-## Trade-offs
+The browser talks to a Java service. That service stores the work in PostgreSQL, asks a Python component to read the documents and draft an answer, and asks a separate Python worker to create the ticket only after approval. Local file storage is Garage, an S3-compatible store that runs on the same machine. Redis shares limits when more than one copy of the service is running.
 
-- Feature hashing instead of a neural embedding, so CI and the demo do not need a model vendor. Paraphrases outside the corpus vocabulary can miss.
-- Extractive answers instead of an unconstrained generation, so a citation is a copied sentence. The prose is plain.
-- Postgres as the queue, so approval and work commit together. Throughput is the database's, not a dedicated broker's.
-- One API process in Compose. Horizontal scale needs the Redis fan-out that is already optional, plus more than one control-plane task.
-- The worker uses the same database role as the API. A stolen worker password could insert a ticket. A production follow-up is a restricted database role.
+The default answers do not call a paid model. They copy the supporting sentences from the uploaded documents. A paid model can be connected later. It can change the wording. It still cannot approve a ticket.
 
-## Limitations
+More detail:
 
-- No live AWS account is wired up, and the Terraform stack stops at data services plus an empty ECS cluster.
-- No load-test numbers are published until `scripts/benchmark.py` is run against a stack.
-- OpenAI wording is implemented and unused unless a key and provider are configured. The default demo does not pretend to be that model.
-- MCP and multi-agent orchestration are non-goals. See `docs/non-goals.md` and `docs/roadmap.md`.
-- The offline ranker loads the active chunks for a knowledge base and fuses them in process. That is acceptable for this corpus. It is not an ANN-serving design for millions of chunks, though an HNSW index is created.
+| Topic | Document |
+|---|---|
+| How a request moves from question to ticket | `docs/run-state-machine.md` |
+| Who may approve | `docs/approval-state-machine.md` |
+| What the system deliberately does not do | `docs/non-goals.md` |
+| Security notes | `docs/threat-model.md` |
+| How to run the checks | `docs/ci-cd.md` |
 
-## Future roadmap
-
-`docs/roadmap.md`.
-
-## Repository map
-
-`docs/repository-architecture.md`.
-
-## API
-
-`docs/api-boundary.md`. Interactive docs: http://localhost:8080/swagger-ui after the control plane is up.
-
-## Tests
-
-```text
-mvn -B -f control-plane/pom.xml test
-python -m pytest py/aegislib/tests -q
-python evaluation/run_critical.py
-python scripts/scan_secrets.py
-```
-
-CI is `.github/workflows/ci.yml`.
-
-Run the commands above before quoting test counts; committed reports are not a substitute for a fresh verification run.
+API notes are in `docs/api-boundary.md`. After the local stack is running, technical API pages are at http://localhost:8080/swagger-ui.
