@@ -1,3 +1,9 @@
 # XsltView path handling. The control plane is a JSON API and does not render XSLT views.
 # The open-source fix is Spring Framework 7, which is a different application generation.
 CVE-2026-47884
+
+# Server-Sent Event view fragments. Spring rates this Low. It applies only when an
+# application renders view fragments into an event stream. This API sends JSON run
+# events and does not render views. The open-source fix is Spring Framework 7.0.9;
+# the 6.2 patch is enterprise-only.
+CVE-2026-47890

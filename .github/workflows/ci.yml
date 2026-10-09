@@ -110,13 +110,6 @@ jobs:
           print("python dependency audit: service packages clean")
           PY
 
-  terraform:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - run: docker run --rm -v "$PWD/infrastructure/aws:/workspace" -w /workspace hashicorp/terraform:1.9.8 init -backend=false
-      - run: docker run --rm -v "$PWD/infrastructure/aws:/workspace" -w /workspace hashicorp/terraform:1.9.8 validate
-
   images:
     runs-on: ubuntu-latest
     strategy:

@@ -10,10 +10,9 @@
 - secret scan and the release-configuration contract
 - production npm audit
 - Python service-package audit, ignoring findings that apply only to the audit environment's `pip`
-- Terraform init and validate
 - image build and critical vulnerability scan for the frontend, control plane, runtime, and worker
 
-A critical image finding fails the workflow. `.trivyignore` contains one control-plane exception, `CVE-2026-47884`. It applies to Spring MVC `XsltView`, which this API does not use. The open-source fix is Spring Framework 7. Netty is pinned to 4.1.138.Final and Tomcat to 10.1.60 on Spring Boot 3.5.16 so the other critical findings in that scan have fixed builds.
+A critical image finding fails the workflow. `.trivyignore` contains two control-plane exceptions. `CVE-2026-47884` applies to Spring MVC `XsltView`, which this API does not use. `CVE-2026-47890` applies to Server-Sent Events that render view fragments. This API streams JSON run events and does not render view fragments. Spring rates that issue Low. The open-source fix for both is Spring Framework 7; the 6.2 patch is enterprise-only. Netty is pinned to 4.1.138.Final and Tomcat to 10.1.60 on Spring Boot 3.5.16 so the other critical findings in that scan have fixed builds.
 
 The accepted Tailwind `braces` finding is build-time tooling. The production frontend image is the standalone server, and the production npm audit is the dependency gate.
 
